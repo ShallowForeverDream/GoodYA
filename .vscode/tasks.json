@@ -1,0 +1,30 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "VC6 Build Debug",
+      "type": "shell",
+      "command": "${workspaceFolder}\\.vscode\\vc6_build_debug.cmd",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [
+        "$msCompile"
+      ]
+    },
+    {
+      "label": "VC6 Run Debug",
+      "type": "shell",
+      "dependsOn": "VC6 Build Debug",
+      "command": "${workspaceFolder}\\Debug\\GoodYa.exe",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    }
+  ]
+}
