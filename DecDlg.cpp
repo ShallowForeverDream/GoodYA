@@ -1,10 +1,11 @@
-// 解压对话框实现文件
+// DecDlg.cpp : 解压设置对话框实现
 //
 
 #include "stdafx.h"
 #include "GoodYa.h"
 #include "DecDlg.h"
 #include "Huffman.h"
+#include "PassDlg.h"
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -13,8 +14,7 @@ static char THIS_FILE[] = __FILE__;
 #endif
 
 /////////////////////////////////////////////////////////////////////////////
-// 解压对话框
-
+// CDecDlg 对话框
 
 CDecDlg::CDecDlg(CWnd* pParent /*=NULL*/)
 	: CDialog(CDecDlg::IDD, pParent)
@@ -24,7 +24,6 @@ CDecDlg::CDecDlg(CWnd* pParent /*=NULL*/)
 	m_cover = 0;
 	//}}AFX_DATA_INIT
 }
-
 
 void CDecDlg::DoDataExchange(CDataExchange* pDX)
 {
@@ -36,7 +35,6 @@ void CDecDlg::DoDataExchange(CDataExchange* pDX)
 	//}}AFX_DATA_MAP
 }
 
-
 BEGIN_MESSAGE_MAP(CDecDlg, CDialog)
 	//{{AFX_MSG_MAP(CDecDlg)
 	ON_BN_CLICKED(IDC_BUTTON2, OnDecDlgCancel)
@@ -47,143 +45,195 @@ BEGIN_MESSAGE_MAP(CDecDlg, CDialog)
 END_MESSAGE_MAP()
 
 /////////////////////////////////////////////////////////////////////////////
-// 解压对话框消息处理
+// CDecDlg 消息处理
 
-void CDecDlg::OnDecDlgCancel() 
+void CDecDlg::OnDecDlgCancel()
 {
-	// 待完善：在此添加控件通知处理程序代码
-	CDialog::OnCancel();	
+	EndDialog(IDCANCEL);
 }
 
-//对文件进行解压缩
-void CDecDlg::OnDecDlgOk() 
+// 读取输入路径并转成 ANSI，兼容 Huffman 接口
+BOOL CDecDlg::GetInputPath(char outPath[500])
 {
-	// 待完善：在此添加控件通知处理程序代码
-	Huffman huffman;
-	TCHAR savePathText[500] = {0};
-	char savePath[500] = {0};
-	char codePath[500] = {0};
-	char* savepath = NULL;
+	if (outPath == NULL)
+		return FALSE;
 
-	//获取待解压文件路径
-	GetDlgItem(IDC_EDIT2)->GetWindowText(savePathText,500);
+	TCHAR savePathText[500] = {0};
+	GetDlgItem(IDC_EDIT2)->GetWindowText(savePathText, 500);
+
 #ifdef _UNICODE
-	if (WideCharToMultiByte(CP_ACP, 0, savePathText, -1, savePath, sizeof(savePath), NULL, NULL) == 0)
+	if (WideCharToMultiByte(CP_ACP, 0, savePathText, -1, outPath, 500, NULL, NULL) == 0)
 	{
 		AfxMessageBox(_T("路径转换失败！"));
-		return;
+		return FALSE;
 	}
 #else
-	strncpy(savePath, savePathText, sizeof(savePath) - 1);
-	savePath[sizeof(savePath) - 1] = '\0';
+	strncpy(outPath, savePathText, 499);
+	outPath[499] = '\0';
 #endif
-	if (savePath[0] == '\0')
+
+	if (outPath[0] == '\0')
 	{
 		AfxMessageBox(_T("请选择 .huf 文件！"));
-		return;
+		return FALSE;
 	}
-	//从文件读入编码
-	huffman.ReadCodeFromFile(savePath);
-	//将0-1编码串解码
-	huffman.Decode();
-	//设置解压文件存储路径以及文件名
-	int saveLen = (int)strlen(savePath);
-	if (saveLen < 3)
-	{
-		AfxMessageBox(_T("文件路径无效！"));
-		return;
-	}
-	strncpy(codePath,savePath,saveLen-3);
-	codePath[saveLen-3] = '\0';
-	savepath = strcat(codePath,"txt");
-	//将解码结果存入文件
-	huffman.SaveTextToFile(savepath);
-	MessageBox(_T("解压完成。"));
+	return TRUE;
 }
 
-void CDecDlg::OnBrowse() 
+// 弹出密码输入框，供解压时验证口令
+BOOL CDecDlg::PromptPassword(CString& outPassword)
 {
-	// 待完善：在此添加控件通知处理程序代码
-	CString m_strFileName;
-	// 待完善：在此添加控件通知处理程序代码
-	// *.exe 表示只打开exe文件， *.* 表示所有文件
-	LPCTSTR szFilter = _T("压缩文件(*.huf)|*.huf|所有文件(*.*)|*.*||");
-	//显示打开文件的对话框
-	CFileDialog fileDlg(TRUE,NULL,NULL,OFN_HIDEREADONLY | OFN_OVERWRITEPROMPT,szFilter,this);
+	CPassDlg dlg(_T("输入解压密码"), _T("该压缩文件已加密，请输入密码："), this);
+	if (dlg.DoModal() != IDOK)
+		return FALSE;
 
-	//当用户选择OK时，程序取得选择文件的全路径名（包括文件的路径及文件名称），并将相应的数值传输给相关的控件变量。
-	if(fileDlg.DoModal()==IDOK)
-    {
-		m_strFileName=fileDlg.GetPathName();
-		SetDlgItemText(IDC_EDIT2,m_strFileName);
-		//向将变量中的数值传输给控件显示出来。
-		UpdateData(FALSE);
-    }  
-	
+	outPassword = dlg.m_password;
+	if (outPassword.IsEmpty())
+	{
+		AfxMessageBox(_T("密码不能为空！"));
+		return FALSE;
+	}
+	return TRUE;
 }
 
-BOOL CDecDlg::OnInitDialog() 
+// 对文件进行解压缩，支持密码校验与 CRC 校验
+void CDecDlg::OnDecDlgOk()
+{
+	char savePath[500] = {0};
+	if (!GetInputPath(savePath))
+		return;
+
+	Huffman huffman;
+	BOOL hasPassword = FALSE;
+	unsigned long storedCrc = 0;
+	char md5Hex[33] = {0};
+	if (!huffman.GetPackageInfo(savePath, &hasPassword, &storedCrc, md5Hex))
+	{
+		AfxMessageBox(_T("读取压缩文件信息失败！"));
+		return;
+	}
+
+	CString password;
+	char passA[129] = {0};
+	const char* pPass = "";
+	if (hasPassword)
+	{
+		if (!PromptPassword(password))
+			return;
+#ifdef _UNICODE
+		if (WideCharToMultiByte(CP_ACP, 0, password, -1, passA, 129, NULL, NULL) == 0)
+		{
+			AfxMessageBox(_T("密码编码转换失败！"));
+			return;
+		}
+#else
+		strncpy(passA, password, 128);
+		passA[128] = '\0';
+#endif
+		pPass = passA;
+	}
+
+	if (!huffman.ReadCodeFromFile(savePath, pPass))
+	{
+		if (hasPassword)
+			AfxMessageBox(_T("密码错误，或压缩文件已损坏！"));
+		else
+			AfxMessageBox(_T("读取压缩文件失败，文件可能已损坏！"));
+		return;
+	}
+
+	huffman.Decode();
+
+	// 若文件记录了原文 CRC32，则在解压后进行一致性校验
+	if (storedCrc != 0)
+	{
+		unsigned long decodedCrc = huffman.GetTextCRC32();
+		if (decodedCrc != storedCrc)
+		{
+			AfxMessageBox(_T("CRC 校验失败：解压结果与原文不一致！"));
+			return;
+		}
+	}
+
+	char outPath[500] = {0};
+	strncpy(outPath, savePath, sizeof(outPath) - 1);
+	outPath[sizeof(outPath) - 1] = '\0';
+	char* pExt = strrchr(outPath, '.');
+	if (pExt != NULL)
+		strcpy(pExt + 1, "txt");
+	else
+		strcat(outPath, ".txt");
+
+	huffman.SaveTextToFile(outPath);
+	AfxMessageBox(_T("解压完成。"));
+	EndDialog(IDOK);
+}
+
+void CDecDlg::OnBrowse()
+{
+	CString m_strFileName;
+	LPCTSTR szFilter = _T("压缩文件(*.huf)|*.huf|所有文件(*.*)|*.*||");
+	CFileDialog fileDlg(TRUE, NULL, NULL, OFN_HIDEREADONLY | OFN_OVERWRITEPROMPT, szFilter, this);
+
+	if (fileDlg.DoModal() == IDOK)
+	{
+		m_strFileName = fileDlg.GetPathName();
+		SetDlgItemText(IDC_EDIT2, m_strFileName);
+		UpdateData(FALSE);
+	}
+}
+
+BOOL CDecDlg::OnInitDialog()
 {
 	CDialog::OnInitDialog();
-	
-	// 待完善：在此添加额外初始化
-    // 获取树形控件的句柄
+
 	HWND hWnd = m_treeCtrl.GetSafeHwnd();
-	if (hWnd != NULL) {
-		// 使用hWnd进行操作
-	    // 初始化树形控件
+	if (hWnd != NULL)
 		InitTree();
-	}
-	
-	return TRUE;  // 除非将焦点设置到控件，否则返回 TRUE
-	              // 例外: OCX 属性页应返回 FALSE
+
+	return TRUE;
 }
 
 void CDecDlg::InitTree()
 {
-	// 根节点为C盘根目录
-    HTREEITEM hRoot = m_treeCtrl.InsertItem(_T("D:\\"), TVI_ROOT, TVI_LAST); 
-	// 递归填充子目录和文件
-    //PopulateTree(hRoot, _T("D:\\")); 
+	HTREEITEM hRoot = m_treeCtrl.InsertItem(_T("D:\\"), TVI_ROOT, TVI_LAST);
+	UNREFERENCED_PARAMETER(hRoot);
+	// 如需展示完整目录树，可启用下方递归函数
+	// PopulateTree(hRoot, _T("D:\\"));
 }
 
-void CDecDlg::PopulateTree(HTREEITEM hParent, LPCTSTR path){
-    CString fullPath;
-    WIN32_FIND_DATA FindFileData;
-    HANDLE hFind = INVALID_HANDLE_VALUE;
-	// 先转换成 CString
-    CString strPath(path);
-	// 获取目录下所有文件和子目录的路径
-    fullPath = strPath + _T("\\*.*");
-	// 开始查找第一个匹配项
-    hFind = FindFirstFile(fullPath, &FindFileData);
-	// 查找失败，返回
-    if (hFind == INVALID_HANDLE_VALUE) return;
-    do {
-		// 是目录则递归添加子目录和文件
-        if (FindFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
-			// 忽略隐藏目录（如 . 和 ..）
-            if (FindFileData.cFileName[0] != '.') {
-				// 子目录完整路径
-                CString subPath = strPath + _T("\\") + FindFileData.cFileName;
-				// 添加子目录项到树中
-                HTREEITEM hChild = m_treeCtrl.InsertItem(FindFileData.cFileName, hParent, TVI_LAST);
-				// 递归填充子目录和文件
-                PopulateTree(hChild, subPath);
-            }
-        } else {// 是文件则直接添加到树中
-			// 添加文件项到树中
-            m_treeCtrl.InsertItem(FindFileData.cFileName, hParent, TVI_LAST);
-        }
-    } while (FindNextFile(hFind, &FindFileData));// 查找下一个匹配项，直到结束
-	// 关闭查找句柄
-    FindClose(hFind);
+void CDecDlg::PopulateTree(HTREEITEM hParent, LPCTSTR path)
+{
+	CString fullPath;
+	WIN32_FIND_DATA FindFileData;
+	HANDLE hFind = INVALID_HANDLE_VALUE;
+	CString strPath(path);
+	fullPath = strPath + _T("\\*.*");
+	hFind = FindFirstFile(fullPath, &FindFileData);
+	if (hFind == INVALID_HANDLE_VALUE)
+		return;
+
+	do
+	{
+		if (FindFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+		{
+			if (FindFileData.cFileName[0] != '.')
+			{
+				CString subPath = strPath + _T("\\") + FindFileData.cFileName;
+				HTREEITEM hChild = m_treeCtrl.InsertItem(FindFileData.cFileName, hParent, TVI_LAST);
+				PopulateTree(hChild, subPath);
+			}
+		}
+		else
+		{
+			m_treeCtrl.InsertItem(FindFileData.cFileName, hParent, TVI_LAST);
+		}
+	} while (FindNextFile(hFind, &FindFileData));
+
+	FindClose(hFind);
 }
 
-void CDecDlg::OnCancelMode() 
+void CDecDlg::OnCancelMode()
 {
 	CDialog::OnCancelMode();
-	
-	// 待完善：在此添加消息处理程序代码
-	
 }

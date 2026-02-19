@@ -1,4 +1,4 @@
-// GoodYaView.h : interface of the CGoodYaView class
+// GoodYaView.h : 视图类接口声明
 //
 /////////////////////////////////////////////////////////////////////////////
 
@@ -12,30 +12,32 @@
 
 class CGoodYaView : public CView
 {
-protected: // create from serialization only
+protected: // 仅用于序列化创建
 	CGoodYaView();
 	DECLARE_DYNCREATE(CGoodYaView)
 
-// Attributes
+// 属性
 public:
 	CGoodYaDoc* GetDocument();
 
-// Operations
+// 操作
 public:
 
-// Overrides
-	// ClassWizard generated virtual function overrides
+// 重写
+	// ClassWizard 生成的虚函数重写
 	//{{AFX_VIRTUAL(CGoodYaView)
 	public:
-	virtual void OnDraw(CDC* pDC);  // overridden to draw this view
+	virtual void OnDraw(CDC* pDC);  // 重写：绘制视图内容
 	virtual BOOL PreCreateWindow(CREATESTRUCT& cs);
+	virtual void OnInitialUpdate();
+	virtual void OnUpdate(CView* pSender, LPARAM lHint, CObject* pHint);
 	protected:
 	virtual BOOL OnPreparePrinting(CPrintInfo* pInfo);
 	virtual void OnBeginPrinting(CDC* pDC, CPrintInfo* pInfo);
 	virtual void OnEndPrinting(CDC* pDC, CPrintInfo* pInfo);
 	//}}AFX_VIRTUAL
 
-// Implementation
+// 实现
 public:
 	virtual ~CGoodYaView();
 #ifdef _DEBUG
@@ -44,17 +46,24 @@ public:
 #endif
 
 protected:
+	CEdit m_previewEdit;
+	BOOL m_bSyncingEdit;
+	void ResizePreviewEdit();
+	void UpdateEditFromDocument();
+	void UpdateDocumentFromEdit();
 
-// Generated message map functions
+// 消息映射函数
 protected:
 	//{{AFX_MSG(CGoodYaView)
 	afx_msg void OnComDlg();
 	afx_msg void OnDecDlg();
+	afx_msg void OnSize(UINT nType, int cx, int cy);
+	afx_msg void OnPreviewEditChange();
 	//}}AFX_MSG
 	DECLARE_MESSAGE_MAP()
 };
 
-#ifndef _DEBUG  // debug version in GoodYaView.cpp
+#ifndef _DEBUG  // 调试版本在 GoodYaView.cpp 中实现
 inline CGoodYaDoc* CGoodYaView::GetDocument()
    { return (CGoodYaDoc*)m_pDocument; }
 #endif
@@ -62,6 +71,6 @@ inline CGoodYaDoc* CGoodYaView::GetDocument()
 /////////////////////////////////////////////////////////////////////////////
 
 //{{AFX_INSERT_LOCATION}}
-// Microsoft Visual C++ will insert additional declarations immediately before the previous line.
+// Microsoft Visual C++ 会在上一行之前插入附加声明。
 
 #endif // !defined(AFX_GOODYAVIEW_H__30F1EF70_D7D9_484D_A876_F637169A22D4__INCLUDED_)

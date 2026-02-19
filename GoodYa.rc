@@ -249,6 +249,17 @@ BEGIN
 END
 
 
+IDD_PASSDLG DIALOG DISCARDABLE  0, 0, 186, 66
+STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "输入密码"
+FONT 9, "宋体"
+BEGIN
+    LTEXT           "请输入密码：",IDC_STATIC_PASS_PROMPT,12,14,160,8
+    EDITTEXT        IDC_EDIT_PASS,12,28,160,14,ES_PASSWORD | ES_AUTOHSCROLL
+    DEFPUSHBUTTON   "确定",IDOK,42,46,45,14
+    PUSHBUTTON      "取消",IDCANCEL,100,46,45,14
+END
+
 #ifndef _MAC
 /////////////////////////////////////////////////////////////////////////////
 //

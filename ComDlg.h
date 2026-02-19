@@ -4,19 +4,19 @@
 #if _MSC_VER > 1000
 #pragma once
 #endif // _MSC_VER > 1000
-// ComDlg.h : header file
+// ComDlg.h : 压缩设置对话框头文件
 //
 
 /////////////////////////////////////////////////////////////////////////////
-// CComDlg dialog
+// CComDlg 对话框
 
 class CComDlg : public CDialog
 {
-// Construction
+// 构造
 public:
-	CComDlg(CWnd* pParent = NULL);   // standard constructor
+	CComDlg(CWnd* pParent = NULL);   // 标准构造函数
 
-// Dialog Data
+// 对话框数据
 	//{{AFX_DATA(CComDlg)
 	enum { IDD = IDD_DIALOG1 };
 	int		m_Extend;
@@ -25,18 +25,21 @@ public:
 	BOOL	m_isLock;
 	//}}AFX_DATA
 
+	CString m_password; // 压缩密码（明文仅保存在本次对话框生命周期）
 
-// Overrides
-	// ClassWizard generated virtual function overrides
+// 重写
+	// ClassWizard 生成的虚函数重写
 	//{{AFX_VIRTUAL(CComDlg)
 	protected:
-	virtual void DoDataExchange(CDataExchange* pDX);    // DDX/DDV support
+	virtual void DoDataExchange(CDataExchange* pDX);    // DDX/DDV 数据交换支持
 	//}}AFX_VIRTUAL
 
-// Implementation
+// 实现
 protected:
+	BOOL GetInputPath(char outPath[500]);
+	BOOL GetPasswordA(char outPass[129]);
 
-	// Generated message map functions
+	// 消息映射函数
 	//{{AFX_MSG(CComDlg)
 	afx_msg void OnCancel();
 	afx_msg void OnOk();
@@ -49,6 +52,6 @@ protected:
 };
 
 //{{AFX_INSERT_LOCATION}}
-// Microsoft Visual C++ will insert additional declarations immediately before the previous line.
+// Microsoft Visual C++ 会在上一行之前插入附加声明。
 
 #endif // !defined(AFX_COMDLG_H__1010E85E_4FBD_4BB3_A793_6CF0CBF7683C__INCLUDED_)

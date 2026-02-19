@@ -4,19 +4,19 @@
 #if _MSC_VER > 1000
 #pragma once
 #endif // _MSC_VER > 1000
-// DecDlg.h : header file
+// DecDlg.h : 解压设置对话框头文件
 //
 
 /////////////////////////////////////////////////////////////////////////////
-// CDecDlg dialog
+// CDecDlg 对话框
 
 class CDecDlg : public CDialog
 {
-// Construction
+// 构造
 public:
-	CDecDlg(CWnd* pParent = NULL);   // standard constructor
+	CDecDlg(CWnd* pParent = NULL);   // 标准构造函数
 
-// Dialog Data
+// 对话框数据
 	//{{AFX_DATA(CDecDlg)
 	enum { IDD = IDD_DIALOG2 };
 	CTreeCtrl	m_treeCtrl;
@@ -24,18 +24,19 @@ public:
 	int		m_cover;
 	//}}AFX_DATA
 
-
-// Overrides
-	// ClassWizard generated virtual function overrides
+// 重写
+	// ClassWizard 生成的虚函数重写
 	//{{AFX_VIRTUAL(CDecDlg)
 	protected:
-	virtual void DoDataExchange(CDataExchange* pDX);    // DDX/DDV support
+	virtual void DoDataExchange(CDataExchange* pDX);    // DDX/DDV 数据交换支持
 	//}}AFX_VIRTUAL
 
-// Implementation
+// 实现
 protected:
+	BOOL GetInputPath(char outPath[500]);
+	BOOL PromptPassword(CString& outPassword);
 
-	// Generated message map functions
+	// 消息映射函数
 	//{{AFX_MSG(CDecDlg)
 	afx_msg void OnDecDlgCancel();
 	afx_msg void OnDecDlgOk();
@@ -49,6 +50,6 @@ protected:
 };
 
 //{{AFX_INSERT_LOCATION}}
-// Microsoft Visual C++ will insert additional declarations immediately before the previous line.
+// Microsoft Visual C++ 会在上一行之前插入附加声明。
 
 #endif // !defined(AFX_DECDLG_H__5791C5B5_76E2_481C_AAB2_231B0144C4D6__INCLUDED_)

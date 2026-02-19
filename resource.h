@@ -7,6 +7,7 @@
 #define IDR_GOODYATYPE                  129
 #define IDD_DIALOG1                     130
 #define IDD_DIALOG2                     131
+#define IDD_PASSDLG                     132
 #define IDC_BROWSE                      1000
 #define IDC_OPEN                        1000
 #define IDC_EDIT1                       1001
@@ -29,6 +30,8 @@
 #define IDC_BUTTON1                     1018
 #define IDC_BUTTON2                     1019
 #define IDC_EDIT2                       1021
+#define IDC_EDIT_PASS                   1022
+#define IDC_STATIC_PASS_PROMPT          1023
 #define IDM_COM                         32771
 #define IDM_DEC                         32772
 #define IDS_TIMER                       61446
@@ -40,7 +43,7 @@
 #define _APS_3D_CONTROLS                     1
 #define _APS_NEXT_RESOURCE_VALUE        134
 #define _APS_NEXT_COMMAND_VALUE         32785
-#define _APS_NEXT_CONTROL_VALUE         1022
+#define _APS_NEXT_CONTROL_VALUE         1024
 #define _APS_NEXT_SYMED_VALUE           101
 #endif
 #endif
