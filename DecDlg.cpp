@@ -1,4 +1,4 @@
-// DecDlg.cpp : implementation file
+// 解压对话框实现文件
 //
 
 #include "stdafx.h"
@@ -13,7 +13,7 @@ static char THIS_FILE[] = __FILE__;
 #endif
 
 /////////////////////////////////////////////////////////////////////////////
-// CDecDlg dialog
+// 解压对话框
 
 
 CDecDlg::CDecDlg(CWnd* pParent /*=NULL*/)
@@ -47,49 +47,69 @@ BEGIN_MESSAGE_MAP(CDecDlg, CDialog)
 END_MESSAGE_MAP()
 
 /////////////////////////////////////////////////////////////////////////////
-// CDecDlg message handlers
+// 解压对话框消息处理
 
 void CDecDlg::OnDecDlgCancel() 
 {
-	// TODO: Add your control notification handler code here
+	// 待完善：在此添加控件通知处理程序代码
 	CDialog::OnCancel();	
 }
 
 //对文件进行解压缩
 void CDecDlg::OnDecDlgOk() 
 {
-	// TODO: Add your control notification handler code here
+	// 待完善：在此添加控件通知处理程序代码
 	Huffman huffman;
-	char savePath[500],codePath[500];
-	char* savepath;
+	TCHAR savePathText[500] = {0};
+	char savePath[500] = {0};
+	char codePath[500] = {0};
+	char* savepath = NULL;
 
 	//获取待解压文件路径
-	GetDlgItem(IDC_EDIT2)->GetWindowText(savePath,500);
-	//MessageBox(savePath);
+	GetDlgItem(IDC_EDIT2)->GetWindowText(savePathText,500);
+#ifdef _UNICODE
+	if (WideCharToMultiByte(CP_ACP, 0, savePathText, -1, savePath, sizeof(savePath), NULL, NULL) == 0)
+	{
+		AfxMessageBox(_T("路径转换失败！"));
+		return;
+	}
+#else
+	strncpy(savePath, savePathText, sizeof(savePath) - 1);
+	savePath[sizeof(savePath) - 1] = '\0';
+#endif
+	if (savePath[0] == '\0')
+	{
+		AfxMessageBox(_T("请选择 .huf 文件！"));
+		return;
+	}
 	//从文件读入编码
 	huffman.ReadCodeFromFile(savePath);
 	//将0-1编码串解码
 	huffman.Decode();
-	huffman.PrintCode();
 	//设置解压文件存储路径以及文件名
-	strncpy(codePath,savePath,strlen(savePath)-3);
-	codePath[strlen(savePath)-3] = '\0';
+	int saveLen = (int)strlen(savePath);
+	if (saveLen < 3)
+	{
+		AfxMessageBox(_T("文件路径无效！"));
+		return;
+	}
+	strncpy(codePath,savePath,saveLen-3);
+	codePath[saveLen-3] = '\0';
 	savepath = strcat(codePath,"txt");
-	//MessageBox(savepath);
 	//将解码结果存入文件
 	huffman.SaveTextToFile(savepath);
-	MessageBox("文件解压成功！");
+	MessageBox(_T("解压完成。"));
 }
 
 void CDecDlg::OnBrowse() 
 {
-	// TODO: Add your control notification handler code here
+	// 待完善：在此添加控件通知处理程序代码
 	CString m_strFileName;
-	// TODO: Add your control notification handler code here
+	// 待完善：在此添加控件通知处理程序代码
 	// *.exe 表示只打开exe文件， *.* 表示所有文件
-	char szFilter[] = {"huf files(*.huf)|*.huf|All Files(*.*)|*.*|"};
+	LPCTSTR szFilter = _T("压缩文件(*.huf)|*.huf|所有文件(*.*)|*.*||");
 	//显示打开文件的对话框
-	CFileDialog fileDlg(TRUE,NULL,NULL,OFN_HIDEREADONLY | OFN_OVERWRITEPROMPT,szFilter,NULL);
+	CFileDialog fileDlg(TRUE,NULL,NULL,OFN_HIDEREADONLY | OFN_OVERWRITEPROMPT,szFilter,this);
 
 	//当用户选择OK时，程序取得选择文件的全路径名（包括文件的路径及文件名称），并将相应的数值传输给相关的控件变量。
 	if(fileDlg.DoModal()==IDOK)
@@ -106,7 +126,7 @@ BOOL CDecDlg::OnInitDialog()
 {
 	CDialog::OnInitDialog();
 	
-	// TODO: Add extra initialization here
+	// 待完善：在此添加额外初始化
     // 获取树形控件的句柄
 	HWND hWnd = m_treeCtrl.GetSafeHwnd();
 	if (hWnd != NULL) {
@@ -115,8 +135,8 @@ BOOL CDecDlg::OnInitDialog()
 		InitTree();
 	}
 	
-	return TRUE;  // return TRUE unless you set the focus to a control
-	              // EXCEPTION: OCX Property Pages should return FALSE
+	return TRUE;  // 除非将焦点设置到控件，否则返回 TRUE
+	              // 例外: OCX 属性页应返回 FALSE
 }
 
 void CDecDlg::InitTree()
@@ -164,6 +184,6 @@ void CDecDlg::OnCancelMode()
 {
 	CDialog::OnCancelMode();
 	
-	// TODO: Add your message handler code here
+	// 待完善：在此添加消息处理程序代码
 	
 }
