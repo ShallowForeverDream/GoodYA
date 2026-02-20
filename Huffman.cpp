@@ -17,15 +17,19 @@ static const int kTailMagicLen = 6;
 static const int kMd5HexLen = 32;
 static const int kTailSize = kTailMagicLen + 1 + 4 + kMd5HexLen;
 
+// 功能：向目标字符串末尾追加指定长度的原始字节。
 static void AppendBytes(string& buf, const void* data, int len)
 {
+	// 当输入指针为空或长度非法时直接返回，避免越界追加。
 	if (data == NULL || len <= 0)
 		return;
 	buf.append((const char*)data, len);
 }
 
+// 功能：从字节流读取固定长度数据，并同步推进读取指针。
 static BOOL ReadBytes(const unsigned char*& p, int& remain, void* out, int len)
 {
+	// 先做剩余长度检查，再拷贝并更新指针与剩余计数。
 	if (len < 0 || remain < len)
 		return FALSE;
 	if (len > 0)
@@ -38,8 +42,10 @@ static BOOL ReadBytes(const unsigned char*& p, int& remain, void* out, int len)
 }
 
 // 计算缓冲区 CRC32（多项式 0xEDB88320）
+// 功能：计算内存缓冲区的 CRC32 校验值。
 static unsigned long CalcCRC32Buffer(const unsigned char* data, int len)
 {
+	// 首次调用时初始化 CRC32 查表，随后按字节滚动计算。
 	static BOOL s_inited = FALSE;
 	static unsigned long s_table[256];
 	if (!s_inited)
@@ -100,33 +106,43 @@ inline static unsigned int H(unsigned int x, unsigned int y, unsigned int z) { r
 inline static unsigned int I(unsigned int x, unsigned int y, unsigned int z) { return y ^ (x | ~z); }
 inline static unsigned int ROTATE_LEFT(unsigned int x, int n) { return (x << n) | (x >> (32 - n)); }
 
+// 功能：执行 MD5 第 1 轮的单步变换。
 inline static void FF(unsigned int &a, unsigned int b, unsigned int c, unsigned int d, unsigned int x, int s, unsigned int ac)
 {
+	// 按 RFC1321 规则更新寄存器 a。
 	a += F(b, c, d) + x + ac;
 	a = ROTATE_LEFT(a, s);
 	a += b;
 }
+// 功能：执行 MD5 第 2 轮的单步变换。
 inline static void GG(unsigned int &a, unsigned int b, unsigned int c, unsigned int d, unsigned int x, int s, unsigned int ac)
 {
+	// 按 RFC1321 规则更新寄存器 a。
 	a += G(b, c, d) + x + ac;
 	a = ROTATE_LEFT(a, s);
 	a += b;
 }
+// 功能：执行 MD5 第 3 轮的单步变换。
 inline static void HH(unsigned int &a, unsigned int b, unsigned int c, unsigned int d, unsigned int x, int s, unsigned int ac)
 {
+	// 按 RFC1321 规则更新寄存器 a。
 	a += H(b, c, d) + x + ac;
 	a = ROTATE_LEFT(a, s);
 	a += b;
 }
+// 功能：执行 MD5 第 4 轮的单步变换。
 inline static void II(unsigned int &a, unsigned int b, unsigned int c, unsigned int d, unsigned int x, int s, unsigned int ac)
 {
+	// 按 RFC1321 规则更新寄存器 a。
 	a += I(b, c, d) + x + ac;
 	a = ROTATE_LEFT(a, s);
 	a += b;
 }
 
+// 功能：把 32 位整数数组按小端序编码为字节数组。
 static void MD5Encode(unsigned char* output, const unsigned int* input, unsigned int len)
 {
+	// 每 4 字节拆分一个 32 位字，供 MD5 输出阶段使用。
 	unsigned int i, j;
 	for (i = 0, j = 0; j < len; ++i, j += 4)
 	{
@@ -137,8 +153,10 @@ static void MD5Encode(unsigned char* output, const unsigned int* input, unsigned
 	}
 }
 
+// 功能：把字节数组按小端序解码为 32 位整数数组。
 static void MD5Decode(unsigned int* output, const unsigned char* input, unsigned int len)
 {
+	// 每 4 字节合并一个 32 位字，供 MD5 变换阶段使用。
 	unsigned int i, j;
 	for (i = 0, j = 0; j < len; ++i, j += 4)
 	{
@@ -147,8 +165,10 @@ static void MD5Decode(unsigned int* output, const unsigned char* input, unsigned
 	}
 }
 
+// 功能：执行一次 64 字节分组的 MD5 核心压缩变换。
 static void MD5Transform(unsigned int state[4], const unsigned char block[64])
 {
+	// 依次完成四轮 64 步运算并回写 state。
 	unsigned int a = state[0], b = state[1], c = state[2], d = state[3];
 	unsigned int x[16];
 	MD5Decode(x, block, 64);
@@ -229,8 +249,10 @@ static void MD5Transform(unsigned int state[4], const unsigned char block[64])
 	memset((unsigned char*)x, 0, sizeof(x));
 }
 
+// 功能：初始化 MD5 上下文状态与计数器。
 static void MD5Init(MD5_CTX* context)
 {
+	// 写入 RFC1321 规定的初始常量。
 	context->count[0] = context->count[1] = 0;
 	context->state[0] = 0x67452301;
 	context->state[1] = 0xefcdab89;
@@ -238,8 +260,10 @@ static void MD5Init(MD5_CTX* context)
 	context->state[3] = 0x10325476;
 }
 
+// 功能：增量喂入数据到 MD5 上下文。
 static void MD5Update(MD5_CTX* context, const unsigned char* input, unsigned int inputLen)
 {
+	// 按 64 字节分组处理并缓存不足一块的尾部数据。
 	unsigned int i, index, partLen;
 	index = (unsigned int)((context->count[0] >> 3) & 0x3F);
 
@@ -263,8 +287,10 @@ static void MD5Update(MD5_CTX* context, const unsigned char* input, unsigned int
 	memcpy((unsigned char*)&context->buffer[index], (unsigned char*)&input[i], inputLen - i);
 }
 
+// 功能：完成 MD5 填充并输出最终 16 字节摘要。
 static void MD5Final(unsigned char digest[16], MD5_CTX* context)
 {
+	// 补齐长度信息后进行最后一轮变换并导出 digest。
 	static unsigned char PADDING[64] = { 0x80 };
 	unsigned char bits[8];
 	unsigned int index, padLen;
@@ -280,8 +306,10 @@ static void MD5Final(unsigned char digest[16], MD5_CTX* context)
 }
 
 // 计算口令 MD5（32位十六进制字符串）
+// 功能：计算字符串的 MD5，并输出 32 位十六进制文本。
 static BOOL CalcMD5Hex(const char* text, char outHex[33])
 {
+	// 先算 16 字节摘要，再转成可持久化比较的 hex 字符串。
 	if (outHex == NULL)
 		return FALSE;
 
@@ -300,8 +328,10 @@ static BOOL CalcMD5Hex(const char* text, char outHex[33])
 }
 
 // 使用口令对负载做异或流加/解密（同一函数可双向）
+// 功能：按密码做简单异或加解密（同算法可逆）。
 static void XorCryptPayload(unsigned char* data, int len, const char* password)
 {
+	// 循环使用密码字节与数据逐字节异或。
 	if (data == NULL || len <= 0 || password == NULL || password[0] == '\0')
 		return;
 
@@ -320,6 +350,7 @@ static void XorCryptPayload(unsigned char* data, int len, const char* password)
 // 构造与析构
 //////////////////////////////////////////////////////////////////////
 
+// 功能：构造 Huffman 对象并初始化成员状态。
 Huffman::Huffman()
 {
 	huffTree = NULL;
@@ -329,13 +360,16 @@ Huffman::Huffman()
 	m_storedCrc32 = 0;
 }
 
+// 功能：析构 Huffman 对象并释放动态资源。
 Huffman::~Huffman()
 {
 	ResetData();
 }
 
+// 功能：重置内部数据结构，避免重复压缩/解压时残留状态。
 void Huffman::ResetData()
 {
+	// 释放 Huffman 树与编码表，并清空文本/编码缓存。
 	if (huffTree != NULL)
 	{
 		delete[] huffTree;
@@ -364,8 +398,10 @@ void Huffman::ResetData()
 	m_storedCrc32 = 0;
 }
 
+// 功能：根据字符编码表把原文 text 编码为 code。
 void Huffman::Encode()
 {
+	// 按字符逐个查表并拼接 Huffman 编码串。
 	code = "";
 	if (n <= 0 || chars == NULL)
 		return;
@@ -386,8 +422,10 @@ void Huffman::Encode()
 	}
 }
 
+// 功能：调试输出字符权重表。
 void Huffman::PrintCharWeight()
 {
+	// 逐项打印字符与对应权重。
 	if (chars == NULL || n <= 0)
 		return;
 
@@ -425,8 +463,10 @@ void Huffman::PrintCharWeight()
 	}
 }
 
+// 功能：调试输出字符到编码的映射结果。
 void Huffman::PrintCharCode()
 {
+	// 逐项打印字符及其 Huffman 编码。
 	if (chars == NULL || n <= 0)
 		return;
 
@@ -450,8 +490,10 @@ void Huffman::PrintCharCode()
 	}
 }
 
+// 功能：在候选节点中选出两个最小权值节点用于建树。
 void Huffman::select(int nNode, int &s1, int &s2)
 {
+	// 仅挑选 parent==-1 的节点，并返回最小与次小下标。
 	s1 = s2 = 0;
 	int i;
 	for (i = 1; i <= nNode; ++i)
@@ -484,18 +526,24 @@ void Huffman::select(int nNode, int &s1, int &s2)
 	}
 }
 
+// 功能：调试打印当前压缩编码串。
 void Huffman::PrintCode()
 {
+	// 直接输出成员 code 内容。
 	AfxMessageBox(CString(code.c_str()));
 }
 
+// 功能：调试打印当前原文文本。
 void Huffman::PrintText()
 {
+	// 直接输出成员 text 内容。
 	AfxMessageBox(CString(text.c_str()));
 }
 
+// 功能：根据权重统计结果构建 Huffman 树并生成编码表。
 void Huffman::MakeCharMap()
 {
+	// 完成建树后逆向回溯每个叶子节点得到最终编码。
 	if (n <= 0 || chars == NULL)
 		return;
 
@@ -569,8 +617,10 @@ void Huffman::MakeCharMap()
 	delete[] cd;
 }
 
+// 功能：读取源文本文件到 text 缓冲。
 void Huffman::ReadTextFromFile(char *filename)
 {
+	// 按字节读入文件内容，为后续统计和压缩做准备。
 	ifstream infile(filename, ios::binary);
 	if (!infile)
 	{
@@ -588,8 +638,10 @@ void Huffman::ReadTextFromFile(char *filename)
 	infile.close();
 }
 
+// 功能：将 Huffman 结构与编码数据序列化为压缩包负载。
 BOOL Huffman::BuildPayload(string& payload)
 {
+	// 依次写入节点数、节点数组、编码长度和编码字节。
 	payload = "";
 	if (n <= 0 || chars == NULL)
 		return FALSE;
@@ -627,8 +679,10 @@ BOOL Huffman::BuildPayload(string& payload)
 	return TRUE;
 }
 
+// 功能：保存压缩包文件，并附加密码摘要与 CRC 尾信息。
 BOOL Huffman::SaveCodeToFile(char *filename, const char* password, unsigned long sourceCrc32)
 {
+	// 构建负载后按需加密，再写入尾部校验元数据。
 	string payload;
 	if (!BuildPayload(payload))
 	{
@@ -671,8 +725,10 @@ BOOL Huffman::SaveCodeToFile(char *filename, const char* password, unsigned long
 	return TRUE;
 }
 
+// 功能：预读取压缩包尾部元信息。
 BOOL Huffman::GetPackageInfo(char *filename, BOOL* hasPassword, unsigned long* storedCrc32, char md5HexOut[33])
 {
+	// 解析魔数、密码标记、CRC32 和 MD5 文本供解压前判断。
 	if (hasPassword != NULL)
 		*hasPassword = FALSE;
 	if (storedCrc32 != NULL)
@@ -728,8 +784,10 @@ BOOL Huffman::GetPackageInfo(char *filename, BOOL* hasPassword, unsigned long* s
 	return TRUE;
 }
 
+// 功能：从压缩包负载解析并恢复 Huffman 结构。
 BOOL Huffman::ParsePayload(const unsigned char* payload, int payloadSize)
 {
+	// 校验边界后回填树节点、编码串及内部状态。
 	if (payload == NULL || payloadSize <= 0)
 		return FALSE;
 
@@ -804,8 +862,10 @@ BOOL Huffman::ParsePayload(const unsigned char* payload, int payloadSize)
 	return TRUE;
 }
 
+// 功能：读取压缩包并在需要时验证密码后还原编码数据。
 BOOL Huffman::ReadCodeFromFile(char *filename, const char* password)
 {
+	// 先读尾部信息，再按密码解密并解析 payload。
 	ResetData();
 
 	FILE *f = fopen(filename, "rb");
@@ -897,8 +957,10 @@ BOOL Huffman::ReadCodeFromFile(char *filename, const char* password)
 	return TRUE;
 }
 
+// 功能：将 code 按 Huffman 树解码回原文 text。
 void Huffman::Decode()
 {
+	// 从根节点按位遍历到叶子节点后输出对应字符。
 	text = "";
 	if (n <= 0 || chars == NULL || code.empty())
 		return;
@@ -926,8 +988,10 @@ void Huffman::Decode()
 	}
 }
 
+// 功能：统计原文字符频次并换算为权重。
 void Huffman::CountCharsWeight()
 {
+	// 遍历 text 累加计数，再归一化为每个字符权重。
 	if (text.empty())
 		return;
 
@@ -992,15 +1056,19 @@ void Huffman::CountCharsWeight()
 	}
 }
 
+// 功能：计算当前 text 内容的 CRC32。
 unsigned long Huffman::GetTextCRC32() const
 {
+	// 复用统一 CRC32 逻辑，供压缩后校验一致性。
 	if (text.empty())
 		return 0;
 	return CalcCRC32Buffer((const unsigned char*)text.data(), (int)text.length());
 }
 
+// 功能：将解压得到的 text 写入目标文本文件。
 void Huffman::SaveTextToFile(char *filename)
 {
+	// 按字节顺序输出字符串内容。
 	ofstream outfile(filename, ios::binary);
 	if (!outfile)
 	{
@@ -1011,8 +1079,10 @@ void Huffman::SaveTextToFile(char *filename)
 	outfile.close();
 }
 
+// 功能：获取指定文件的字节长度。
 int Huffman::FileSize(char* path)
 {
+	// 打开文件并返回长度，失败时返回 0。
 	ifstream in(path, ios::binary);
 	if (!in)
 		return 0;
@@ -1022,7 +1092,9 @@ int Huffman::FileSize(char* path)
 	return i;
 }
 
+// 功能：手动输入字符与权重（调试或教学场景）。
 void Huffman::InputCharsWeight()
 {
+	// 从标准输入读取映射数据并填充 chars 表。
 	// 当前版本不从控制台输入权值，统一由 CountCharsWeight 自动统计。
 }

@@ -19,8 +19,7 @@ IMPLEMENT_DYNCREATE(CGoodYaDoc, CDocument)
 
 BEGIN_MESSAGE_MAP(CGoodYaDoc, CDocument)
 	//{{AFX_MSG_MAP(CGoodYaDoc)
-		// 说明：ClassWizard 会在此添加或移除消息映射宏。
-		//    请勿手工修改这些由 ClassWizard 生成的代码块。
+		// ClassWizard 生成区域
 	//}}AFX_MSG_MAP
 END_MESSAGE_MAP()
 
@@ -29,15 +28,17 @@ END_MESSAGE_MAP()
 
 CGoodYaDoc::CGoodYaDoc()
 {
-	// 构造阶段暂不需要额外初始化
+	// 构造阶段不需要额外初始化。
 }
 
 CGoodYaDoc::~CGoodYaDoc()
 {
 }
 
+// 功能：更新文档缓存文本，并按需标记“已修改”。
 void CGoodYaDoc::SetPreviewText(const CString& text, BOOL bMarkModified)
 {
+	// 当文本未变化时直接返回，避免无意义刷新。
 	if (m_previewText == text)
 		return;
 
@@ -46,90 +47,100 @@ void CGoodYaDoc::SetPreviewText(const CString& text, BOOL bMarkModified)
 		SetModifiedFlag(TRUE);
 }
 
+// 功能：新建文档时清空编辑区缓存。
 BOOL CGoodYaDoc::OnNewDocument()
 {
 	if (!CDocument::OnNewDocument())
 		return FALSE;
 
-	// 新建文档时清空编辑内容
 	m_previewText.Empty();
 	return TRUE;
 }
 
+// 功能：按 GBK 字节读取文本文件，并同步到视图编辑区。
 BOOL CGoodYaDoc::OnOpenDocument(LPCTSTR lpszPathName)
 {
-	// 先走基类流程，确保文档状态由框架正确初始化
 	if (!CDocument::OnOpenDocument(lpszPathName))
 		return FALSE;
 
-	CStdioFile file;
-	if (!file.Open(lpszPathName, CFile::modeRead | CFile::shareDenyWrite | CFile::typeText))
+	// 按二进制方式读取，避免文本模式改写换行或编码。
+	CFile file;
+	if (!file.Open(lpszPathName, CFile::modeRead | CFile::shareDenyWrite | CFile::typeBinary))
 	{
 		AfxMessageBox(_T("打开文件失败！"));
 		return FALSE;
 	}
 
+	DWORD dwLen = (DWORD)file.GetLength();
 	CString text;
-	CString line;
-	BOOL bFirstLine = TRUE;
-
-	// 读取完整文本，支持后续编辑和保存
-	while (file.ReadString(line))
+	if (dwLen > 0)
 	{
-		if (!bFirstLine)
-			text += _T("\r\n");
-		text += line;
-		bFirstLine = FALSE;
+		char* pBuf = new char[dwLen + 1];
+		if (pBuf == NULL)
+		{
+			file.Close();
+			AfxMessageBox(_T("内存不足，读取失败！"));
+			return FALSE;
+		}
+
+		UINT nRead = file.Read(pBuf, dwLen);
+		pBuf[nRead] = 0;
+		text = pBuf;
+		delete[] pBuf;
 	}
 	file.Close();
 
+	// 刷新文档缓存并通知视图更新。
 	SetPreviewText(text, FALSE);
 	UpdateAllViews(NULL);
 	SetModifiedFlag(FALSE);
 	return TRUE;
 }
 
+// 功能：把当前编辑内容按 GBK 字节保存到文件。
 BOOL CGoodYaDoc::OnSaveDocument(LPCTSTR lpszPathName)
 {
-	CStdioFile file;
-	if (!file.Open(lpszPathName, CFile::modeCreate | CFile::modeWrite | CFile::shareExclusive | CFile::typeText))
+	CFile file;
+	if (!file.Open(lpszPathName, CFile::modeCreate | CFile::modeWrite | CFile::shareExclusive | CFile::typeBinary))
 	{
 		AfxMessageBox(_T("保存文件失败！"));
 		return FALSE;
 	}
 
-	// 按文本方式保存当前编辑内容
-	file.WriteString(m_previewText);
+	// 直接写入缓存字节，保持 GBK 内容不被运行时再次转码。
+	int nLen = m_previewText.GetLength();
+	if (nLen > 0)
+		file.Write((LPCSTR)m_previewText, nLen);
 	file.Close();
 
 	SetModifiedFlag(FALSE);
 	return TRUE;
 }
 
-/////////////////////////////////////////////////////////////////////////////
-// CGoodYaDoc 序列化
-
+// 功能：预留序列化入口（当前项目主要走 OnOpen/OnSave）。
 void CGoodYaDoc::Serialize(CArchive& ar)
 {
 	if (ar.IsStoring())
 	{
-		// 如需二进制归档，可在此补充存储逻辑
+		// 可在此扩展 CArchive 存储逻辑。
 	}
 	else
 	{
-		// 如需二进制归档，可在此补充加载逻辑
+		// 可在此扩展 CArchive 读取逻辑。
 	}
 }
 
 /////////////////////////////////////////////////////////////////////////////
-// CGoodYaDoc 诊断
+// CGoodYaDoc 调试辅助
 
 #ifdef _DEBUG
+// 功能：调试期对象有效性检查。
 void CGoodYaDoc::AssertValid() const
 {
 	CDocument::AssertValid();
 }
 
+// 功能：调试期输出文档对象状态。
 void CGoodYaDoc::Dump(CDumpContext& dc) const
 {
 	CDocument::Dump(dc);

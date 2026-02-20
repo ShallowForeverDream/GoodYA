@@ -1,4 +1,4 @@
-// MainFrm.cpp : implementation of the CMainFrame class
+// MainFrm.cpp : 主框架窗口实现
 //
 
 #include "stdafx.h"
@@ -34,9 +34,10 @@ static UINT indicators[] =
 	ID_INDICATOR_SCRL,
 };
 
+// 功能：设置主窗口标题“好压V1.0”，并兼容 ANSI/Unicode 窗口 API。
 static void ApplyMainTitle(HWND hWnd)
 {
-	const WCHAR kTitleW[] = { 0x597D, 0x538B, L'V', L'1', L'.', L'0', 0 }; // 濂藉帇V1.0
+	const WCHAR kTitleW[] = { 0x597D, 0x538B, L'V', L'1', L'.', L'0', 0 }; // 好压V1.0
 	char titleA[64] = {0};
 	int n = WideCharToMultiByte(GetACP(), 0, kTitleW, -1, titleA, sizeof(titleA), NULL, NULL);
 	if (n > 0)
@@ -46,7 +47,7 @@ static void ApplyMainTitle(HWND hWnd)
 }
 
 /////////////////////////////////////////////////////////////////////////////
-// CMainFrame construction/destruction
+// CMainFrame 构造/析构
 
 CMainFrame::CMainFrame()
 {
@@ -56,11 +57,13 @@ CMainFrame::~CMainFrame()
 {
 }
 
+// 功能：创建工具栏、状态栏并完成主窗口初始化。
 int CMainFrame::OnCreate(LPCREATESTRUCT lpCreateStruct)
 {
 	if (CFrameWnd::OnCreate(lpCreateStruct) == -1)
 		return -1;
 
+	// 启动 1 秒刷新一次的时钟定时器。
 	SetTimer(1, 1000, NULL);
 
 	if (!m_wndToolBar.CreateEx(this, TBSTYLE_FLAT, WS_CHILD | WS_VISIBLE | CBRS_TOP
@@ -86,6 +89,7 @@ int CMainFrame::OnCreate(LPCREATESTRUCT lpCreateStruct)
 	return 0;
 }
 
+// 功能：创建窗口前设置框架样式与默认标题。
 BOOL CMainFrame::PreCreateWindow(CREATESTRUCT& cs)
 {
 	if (!CFrameWnd::PreCreateWindow(cs))
@@ -97,20 +101,23 @@ BOOL CMainFrame::PreCreateWindow(CREATESTRUCT& cs)
 	return TRUE;
 }
 
+// 功能：更新框架标题时始终显示自定义主标题。
 void CMainFrame::OnUpdateFrameTitle(BOOL /*bAddToTitle*/)
 {
 	ApplyMainTitle(m_hWnd);
 }
 
 /////////////////////////////////////////////////////////////////////////////
-// CMainFrame diagnostics
+// CMainFrame 调试辅助
 
 #ifdef _DEBUG
+// 功能：调试期对象有效性检查。
 void CMainFrame::AssertValid() const
 {
 	CFrameWnd::AssertValid();
 }
 
+// 功能：调试期输出框架窗口状态。
 void CMainFrame::Dump(CDumpContext& dc) const
 {
 	CFrameWnd::Dump(dc);
@@ -119,8 +126,9 @@ void CMainFrame::Dump(CDumpContext& dc) const
 #endif //_DEBUG
 
 /////////////////////////////////////////////////////////////////////////////
-// CMainFrame message handlers
+// CMainFrame 消息处理
 
+// 功能：每秒刷新一次状态栏时钟文本。
 void CMainFrame::OnTimer(UINT nIDEvent)
 {
 	CTime t = CTime::GetCurrentTime();
@@ -128,6 +136,7 @@ void CMainFrame::OnTimer(UINT nIDEvent)
 
 	int index = m_wndStatusBar.CommandToIndex(IDS_TIMER);
 
+	// 按当前字符串宽度动态调整状态栏面板宽度，避免时间显示被截断。
 	CClientDC dc(this);
 	CSize sz = dc.GetTextExtent(str);
 	m_wndStatusBar.SetPaneInfo(index, IDS_TIMER, SBPS_NORMAL, sz.cx);
@@ -136,6 +145,7 @@ void CMainFrame::OnTimer(UINT nIDEvent)
 	CFrameWnd::OnTimer(nIDEvent);
 }
 
+// 功能：窗口激活状态变化时保持默认处理。
 void CMainFrame::OnActivate(UINT nState, CWnd* pWndOther, BOOL bMinimized)
 {
 	CFrameWnd::OnActivate(nState, pWndOther, bMinimized);

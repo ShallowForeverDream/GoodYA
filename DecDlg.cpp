@@ -13,6 +13,29 @@
 static char THIS_FILE[] = __FILE__;
 #endif
 
+// 功能：ToDialogTextByACP，把 Unicode 文本转换为当前进程使用的 TCHAR 文本。
+static CString ToDialogTextByACP(const wchar_t* textW)
+{
+	// 代码段功能：在非 Unicode 编译下按 ACP 编码转换，避免中文乱码。
+	if (textW == NULL)
+		return _T("");
+#ifdef _UNICODE
+	return CString(textW);
+#else
+	char textA[1024] = {0};
+	if (WideCharToMultiByte(CP_ACP, 0, textW, -1, textA, sizeof(textA), NULL, NULL) <= 0)
+		return _T("");
+	return CString(textA);
+#endif
+}
+
+// 功能：ShowMsgByACP，统一消息框文本显示，避免直接弹框时中文乱码。
+static void ShowMsgByACP(const wchar_t* textW)
+{
+	// 代码段功能：通过统一转换后调用 AfxMessageBox。
+	AfxMessageBox(ToDialogTextByACP(textW));
+}
+
 /////////////////////////////////////////////////////////////////////////////
 // CDecDlg 对话框
 
@@ -25,8 +48,10 @@ CDecDlg::CDecDlg(CWnd* pParent /*=NULL*/)
 	//}}AFX_DATA_INIT
 }
 
+// 功能：绑定解压设置对话框控件和成员变量。
 void CDecDlg::DoDataExchange(CDataExchange* pDX)
 {
+	// 代码段功能：执行 DDX/DDV 数据交换。
 	CDialog::DoDataExchange(pDX);
 	//{{AFX_DATA_MAP(CDecDlg)
 	DDX_Control(pDX, IDC_TREE1, m_treeCtrl);
@@ -47,14 +72,18 @@ END_MESSAGE_MAP()
 /////////////////////////////////////////////////////////////////////////////
 // CDecDlg 消息处理
 
+// 功能：处理“取消”按钮，关闭解压设置对话框。
 void CDecDlg::OnDecDlgCancel()
 {
+	// 代码段功能：返回 IDCANCEL 给调用方。
 	EndDialog(IDCANCEL);
 }
 
-// 读取输入路径并转成 ANSI，兼容 Huffman 接口
+// 读取输入路径并转换为 ANSI，便于当前 Huffman 接口使用。
+// 功能：获取待解压文件路径。
 BOOL CDecDlg::GetInputPath(char outPath[500])
 {
+	// 代码段功能：从编辑框读取路径并做编码转换与校验。
 	if (outPath == NULL)
 		return FALSE;
 
@@ -64,7 +93,7 @@ BOOL CDecDlg::GetInputPath(char outPath[500])
 #ifdef _UNICODE
 	if (WideCharToMultiByte(CP_ACP, 0, savePathText, -1, outPath, 500, NULL, NULL) == 0)
 	{
-		AfxMessageBox(_T("路径转换失败！"));
+		ShowMsgByACP(L"路径转换失败！");
 		return FALSE;
 	}
 #else
@@ -74,31 +103,38 @@ BOOL CDecDlg::GetInputPath(char outPath[500])
 
 	if (outPath[0] == '\0')
 	{
-		AfxMessageBox(_T("请选择 .huf 文件！"));
+		ShowMsgByACP(L"请选择 .huf 文件！");
 		return FALSE;
 	}
 	return TRUE;
 }
 
-// 弹出密码输入框，供解压时验证口令
+// 弹出密码输入框，供解压时验证密码。
+// 功能：获取解压密码。
 BOOL CDecDlg::PromptPassword(CString& outPassword)
 {
-	CPassDlg dlg(_T("输入解压密码"), _T("该压缩文件已加密，请输入密码："), this);
+	// 代码段功能：弹出密码输入框并校验非空。
+	CPassDlg dlg(
+		ToDialogTextByACP(L"输入解压密码"),
+		ToDialogTextByACP(L"解压文件已加密，请输入密码："),
+		this);
 	if (dlg.DoModal() != IDOK)
 		return FALSE;
 
 	outPassword = dlg.m_password;
 	if (outPassword.IsEmpty())
 	{
-		AfxMessageBox(_T("密码不能为空！"));
+		ShowMsgByACP(L"密码不能为空！");
 		return FALSE;
 	}
 	return TRUE;
 }
 
-// 对文件进行解压缩，支持密码校验与 CRC 校验
+// 读取压缩包并解压，支持密码校验和 CRC 校验。
+// 功能：执行解压流程。
 void CDecDlg::OnDecDlgOk()
 {
+	// 代码段功能：执行解压主流程。
 	char savePath[500] = {0};
 	if (!GetInputPath(savePath))
 		return;
@@ -109,7 +145,7 @@ void CDecDlg::OnDecDlgOk()
 	char md5Hex[33] = {0};
 	if (!huffman.GetPackageInfo(savePath, &hasPassword, &storedCrc, md5Hex))
 	{
-		AfxMessageBox(_T("读取压缩文件信息失败！"));
+		ShowMsgByACP(L"读取压缩文件信息失败！");
 		return;
 	}
 
@@ -123,7 +159,7 @@ void CDecDlg::OnDecDlgOk()
 #ifdef _UNICODE
 		if (WideCharToMultiByte(CP_ACP, 0, password, -1, passA, 129, NULL, NULL) == 0)
 		{
-			AfxMessageBox(_T("密码编码转换失败！"));
+			ShowMsgByACP(L"密码文本转换失败！");
 			return;
 		}
 #else
@@ -136,21 +172,21 @@ void CDecDlg::OnDecDlgOk()
 	if (!huffman.ReadCodeFromFile(savePath, pPass))
 	{
 		if (hasPassword)
-			AfxMessageBox(_T("密码错误，或压缩文件已损坏！"));
+			ShowMsgByACP(L"密码错误，或压缩文件已损坏！");
 		else
-			AfxMessageBox(_T("读取压缩文件失败，文件可能已损坏！"));
+			ShowMsgByACP(L"读取压缩文件失败，文件不存在或损坏！");
 		return;
 	}
 
 	huffman.Decode();
 
-	// 若文件记录了原文 CRC32，则在解压后进行一致性校验
+	// 文件记录原文 CRC32 时，做解压结果一致性校验。
 	if (storedCrc != 0)
 	{
 		unsigned long decodedCrc = huffman.GetTextCRC32();
 		if (decodedCrc != storedCrc)
 		{
-			AfxMessageBox(_T("CRC 校验失败：解压结果与原文不一致！"));
+			ShowMsgByACP(L"CRC 校验失败，解压结果与原文不一致！");
 			return;
 		}
 	}
@@ -165,15 +201,17 @@ void CDecDlg::OnDecDlgOk()
 		strcat(outPath, ".txt");
 
 	huffman.SaveTextToFile(outPath);
-	AfxMessageBox(_T("解压完成。"));
+	ShowMsgByACP(L"解压完成。");
 	EndDialog(IDOK);
 }
 
+// 功能：浏览并选择待解压 .huf 文件。
 void CDecDlg::OnBrowse()
 {
+	// 代码段功能：打开文件对话框并把选中的路径回填到输入框。
 	CString m_strFileName;
-	LPCTSTR szFilter = _T("压缩文件(*.huf)|*.huf|所有文件(*.*)|*.*||");
-	CFileDialog fileDlg(TRUE, NULL, NULL, OFN_HIDEREADONLY | OFN_OVERWRITEPROMPT, szFilter, this);
+	CString szFilter = ToDialogTextByACP(L"压缩文件(*.huf)|*.huf|所有文件(*.*)|*.*||"); // 原文：压缩文件(*.huf)|*.huf|所有文件(*.*)|*.*||
+	CFileDialog fileDlg(TRUE, NULL, NULL, OFN_HIDEREADONLY | OFN_OVERWRITEPROMPT, (LPCTSTR)szFilter, this);
 
 	if (fileDlg.DoModal() == IDOK)
 	{
@@ -183,8 +221,10 @@ void CDecDlg::OnBrowse()
 	}
 }
 
+// 功能：初始化解压设置对话框。
 BOOL CDecDlg::OnInitDialog()
 {
+	// 代码段功能：初始化树控件内容。
 	CDialog::OnInitDialog();
 
 	HWND hWnd = m_treeCtrl.GetSafeHwnd();
@@ -194,16 +234,20 @@ BOOL CDecDlg::OnInitDialog()
 	return TRUE;
 }
 
+// 功能：初始化目录树根节点。
 void CDecDlg::InitTree()
 {
+	// 代码段功能：先插入根目录节点，后续可按需递归展开。
 	HTREEITEM hRoot = m_treeCtrl.InsertItem(_T("D:\\"), TVI_ROOT, TVI_LAST);
 	UNREFERENCED_PARAMETER(hRoot);
-	// 如需展示完整目录树，可启用下方递归函数
+	// 若要展示完整目录结构，可启用以下递归调用。
 	// PopulateTree(hRoot, _T("D:\\"));
 }
 
+// 功能：递归填充目录树。
 void CDecDlg::PopulateTree(HTREEITEM hParent, LPCTSTR path)
 {
+	// 代码段功能：枚举当前目录并把文件/子目录加入树控件。
 	CString fullPath;
 	WIN32_FIND_DATA FindFileData;
 	HANDLE hFind = INVALID_HANDLE_VALUE;
@@ -233,7 +277,9 @@ void CDecDlg::PopulateTree(HTREEITEM hParent, LPCTSTR path)
 	FindClose(hFind);
 }
 
+// 功能：处理取消模式消息。
 void CDecDlg::OnCancelMode()
 {
+	// 代码段功能：保持 CDialog 默认取消模式处理。
 	CDialog::OnCancelMode();
 }

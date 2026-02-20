@@ -1,4 +1,4 @@
-// GoodYa.cpp : Defines the class behaviors for the application.
+// GoodYa.cpp : 应用程序主入口与框架初始化
 //
 
 #include "stdafx.h"
@@ -20,102 +20,87 @@ static char THIS_FILE[] = __FILE__;
 BEGIN_MESSAGE_MAP(CGoodYaApp, CWinApp)
 	//{{AFX_MSG_MAP(CGoodYaApp)
 	ON_COMMAND(ID_APP_ABOUT, OnAppAbout)
-		// NOTE - the ClassWizard will add and remove mapping macros here.
-		//    DO NOT EDIT what you see in these blocks of generated code!
+		// NOTE - ClassWizard 自动维护区域
 	//}}AFX_MSG_MAP
-	// Standard file based document commands
+	// 标准文档命令
 	ON_COMMAND(ID_FILE_NEW, CWinApp::OnFileNew)
 	ON_COMMAND(ID_FILE_OPEN, CWinApp::OnFileOpen)
-	// Standard print setup command
+	// 打印设置命令
 	ON_COMMAND(ID_FILE_PRINT_SETUP, CWinApp::OnFilePrintSetup)
 END_MESSAGE_MAP()
 
 /////////////////////////////////////////////////////////////////////////////
-// CGoodYaApp construction
+// CGoodYaApp 构造
 
 CGoodYaApp::CGoodYaApp()
 {
-	// TODO: add construction code here,
-	// Place all significant initialization in InitInstance
+	// 主要初始化逻辑放在 InitInstance。
 }
 
 /////////////////////////////////////////////////////////////////////////////
-// The one and only CGoodYaApp object
+// 全局应用对象
 
 CGoodYaApp theApp;
 
 /////////////////////////////////////////////////////////////////////////////
-// CGoodYaApp initialization
+// CGoodYaApp 初始化
 
+// 功能：初始化 MFC 应用、文档模板与主窗口。
 BOOL CGoodYaApp::InitInstance()
 {
 	AfxEnableControlContainer();
 
-	// Standard initialization
-	// If you are not using these features and wish to reduce the size
-	//  of your final executable, you should remove from the following
-	//  the specific initialization routines you do not need.
-
 #ifdef _AFXDLL
-	Enable3dControls();			// Call this when using MFC in a shared DLL
+	Enable3dControls();
 #else
-	Enable3dControlsStatic();	// Call this when linking to MFC statically
+	Enable3dControlsStatic();
 #endif
 
-	// Change the registry key under which our settings are stored.
-	// TODO: You should modify this string to be something appropriate
-	// such as the name of your company or organization.
+	// 设置应用配置注册表路径。
 	SetRegistryKey(_T("Local AppWizard-Generated Applications"));
 
-	LoadStdProfileSettings();  // Load standard INI file options (including MRU)
+	// 加载标准配置（含最近文件列表）。
+	LoadStdProfileSettings();
 
-	// Register the application's document templates.  Document templates
-	//  serve as the connection between documents, frame windows and views.
-
+	// 注册 SDI 文档模板，关联 文档/主框架/视图 三类对象。
 	CSingleDocTemplate* pDocTemplate;
 	pDocTemplate = new CSingleDocTemplate(
 		IDR_MAINFRAME,
 		RUNTIME_CLASS(CGoodYaDoc),
-		RUNTIME_CLASS(CMainFrame),       // main SDI frame window
+		RUNTIME_CLASS(CMainFrame),
 		RUNTIME_CLASS(CGoodYaView));
 	AddDocTemplate(pDocTemplate);
 
-	// Parse command line for standard shell commands, DDE, file open
+	// 解析并执行命令行（支持外部打开文件）。
 	CCommandLineInfo cmdInfo;
 	ParseCommandLine(cmdInfo);
-
-	// Dispatch commands specified on the command line
 	if (!ProcessShellCommand(cmdInfo))
 		return FALSE;
 
-	// The one and only window has been initialized, so show and update it.
+	// 显示并刷新主窗口。
 	m_pMainWnd->ShowWindow(SW_SHOW);
 	m_pMainWnd->UpdateWindow();
 
 	return TRUE;
 }
 
-
 /////////////////////////////////////////////////////////////////////////////
-// CAboutDlg dialog used for App About
+// 关于对话框
 
 class CAboutDlg : public CDialog
 {
 public:
 	CAboutDlg();
 
-// Dialog Data
 	//{{AFX_DATA(CAboutDlg)
 	enum { IDD = IDD_ABOUTBOX };
 	//}}AFX_DATA
 
-	// ClassWizard generated virtual function overrides
 	//{{AFX_VIRTUAL(CAboutDlg)
-	protected:
-	virtual void DoDataExchange(CDataExchange* pDX);    // DDX/DDV support
+protected:
+	virtual void DoDataExchange(CDataExchange* pDX);
 	//}}AFX_VIRTUAL
 
-// Implementation
 protected:
 	//{{AFX_MSG(CAboutDlg)
 	//}}AFX_MSG
@@ -128,6 +113,7 @@ CAboutDlg::CAboutDlg() : CDialog(CAboutDlg::IDD)
 	//}}AFX_DATA_INIT
 }
 
+// 功能：执行关于对话框控件的数据交换。
 void CAboutDlg::DoDataExchange(CDataExchange* pDX)
 {
 	CDialog::DoDataExchange(pDX);
@@ -140,10 +126,9 @@ BEGIN_MESSAGE_MAP(CAboutDlg, CDialog)
 	//}}AFX_MSG_MAP
 END_MESSAGE_MAP()
 
-// App command to run the dialog
+// 功能：显示“关于”对话框。
 void CGoodYaApp::OnAppAbout()
 {
 	CAboutDlg aboutDlg;
 	aboutDlg.DoModal();
 }
-

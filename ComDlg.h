@@ -25,33 +25,32 @@ public:
 	BOOL	m_isLock;
 	//}}AFX_DATA
 
-	CString m_password; // 压缩密码（明文仅保存在本次对话框生命周期）
+	CString m_password; // 当前压缩密码（仅在本次对话生命周期内使用）
 
 // 重写
-	// ClassWizard 生成的虚函数重写
 	//{{AFX_VIRTUAL(CComDlg)
-	protected:
-	virtual void DoDataExchange(CDataExchange* pDX);    // DDX/DDV 数据交换支持
+protected:
+	virtual void DoDataExchange(CDataExchange* pDX);    // 绑定控件与成员变量
 	//}}AFX_VIRTUAL
 
 // 实现
 protected:
-	BOOL GetInputPath(char outPath[500]);
-	BOOL GetPasswordA(char outPass[129]);
+	BOOL GetInputPath(char outPath[500]); // 读取输入框中的待压缩文件路径
+	BOOL GetPasswordA(char outPass[129]); // 将密码转换为 ANSI 字节串供底层算法使用
 
 	// 消息映射函数
 	//{{AFX_MSG(CComDlg)
-	afx_msg void OnCancel();
-	afx_msg void OnOk();
-	virtual BOOL OnInitDialog();
-	afx_msg void OnCancelMode();
-	afx_msg void OnSetpass();
-	afx_msg void OnOpen();
+	afx_msg void OnCancel(); // 点击“取消”后关闭对话框
+	afx_msg void OnOk(); // 校验输入并执行压缩流程
+	virtual BOOL OnInitDialog(); // 初始化下拉选项和默认值
+	afx_msg void OnCancelMode(); // 取消模式消息，保持默认处理
+	afx_msg void OnSetpass(); // 打开密码输入框并更新加密状态
+	afx_msg void OnOpen(); // 浏览并选择要压缩的源文件
 	//}}AFX_MSG
 	DECLARE_MESSAGE_MAP()
 };
 
 //{{AFX_INSERT_LOCATION}}
-// Microsoft Visual C++ 会在上一行之前插入附加声明。
+// Microsoft Visual C++ 将在以前一行之前插入附加声明。
 
 #endif // !defined(AFX_COMDLG_H__1010E85E_4FBD_4BB3_A793_6CF0CBF7683C__INCLUDED_)

@@ -1,4 +1,4 @@
-// MainFrm.h : interface of the CMainFrame class
+// MainFrm.h : 主框架窗口类声明
 //
 /////////////////////////////////////////////////////////////////////////////
 
@@ -11,42 +11,32 @@
 
 class CMainFrame : public CFrameWnd
 {
-	
-protected: // create from serialization only
-	CMainFrame();
+protected: // 仅供序列化创建
+	CMainFrame(); // 构造主框架窗口
 	DECLARE_DYNCREATE(CMainFrame)
 
-// Attributes
 public:
-
-// Operations
-public:
-
-// Overrides
-	// ClassWizard generated virtual function overrides
 	//{{AFX_VIRTUAL(CMainFrame)
-	virtual BOOL PreCreateWindow(CREATESTRUCT& cs);
-	virtual void OnUpdateFrameTitle(BOOL bAddToTitle);
+	virtual BOOL PreCreateWindow(CREATESTRUCT& cs); // 创建前设置窗口样式
+	virtual void OnUpdateFrameTitle(BOOL bAddToTitle); // 刷新窗口标题文本
 	//}}AFX_VIRTUAL
 
-// Implementation
 public:
-	virtual ~CMainFrame();
+	virtual ~CMainFrame(); // 析构主框架窗口
 #ifdef _DEBUG
-	virtual void AssertValid() const;
-	virtual void Dump(CDumpContext& dc) const;
+	virtual void AssertValid() const; // 调试有效性检查
+	virtual void Dump(CDumpContext& dc) const; // 调试输出对象信息
 #endif
 
-protected:  // control bar embedded members
+protected:  // 内嵌控件栏
 	CStatusBar  m_wndStatusBar;
 	CToolBar    m_wndToolBar;
 
-// Generated message map functions
 protected:
 	//{{AFX_MSG(CMainFrame)
-	afx_msg int OnCreate(LPCREATESTRUCT lpCreateStruct);
-	afx_msg void OnTimer(UINT nIDEvent);
-	afx_msg void OnActivate(UINT nState, CWnd* pWndOther, BOOL bMinimized);
+	afx_msg int OnCreate(LPCREATESTRUCT lpCreateStruct); // 创建工具栏和状态栏
+	afx_msg void OnTimer(UINT nIDEvent); // 定时刷新状态栏时间
+	afx_msg void OnActivate(UINT nState, CWnd* pWndOther, BOOL bMinimized); // 窗口激活状态变化
 	//}}AFX_MSG
 	DECLARE_MESSAGE_MAP()
 };

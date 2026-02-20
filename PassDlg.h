@@ -10,7 +10,7 @@
 class CPassDlg : public CDialog
 {
 public:
-	CPassDlg(LPCTSTR lpszTitle, LPCTSTR lpszPrompt, CWnd* pParent = NULL);
+	CPassDlg(LPCTSTR lpszTitle, LPCTSTR lpszPrompt, CWnd* pParent = NULL); // 构造时可自定义标题和提示语
 
 	//{{AFX_DATA(CPassDlg)
 	enum { IDD = IDD_PASSDLG };
@@ -18,13 +18,13 @@ public:
 	//}}AFX_DATA
 
 protected:
-	CString m_title;
-	CString m_prompt;
+	CString m_title;  // 对话框标题文本
+	CString m_prompt; // 密码输入提示文本
 
 	//{{AFX_VIRTUAL(CPassDlg)
 protected:
-	virtual void DoDataExchange(CDataExchange* pDX);
-	virtual BOOL OnInitDialog();
+	virtual void DoDataExchange(CDataExchange* pDX); // 绑定输入框与密码变量
+	virtual BOOL OnInitDialog(); // 初始化标题、提示与输入焦点
 	//}}AFX_VIRTUAL
 
 	DECLARE_MESSAGE_MAP()

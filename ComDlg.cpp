@@ -13,7 +13,10 @@
 #undef THIS_FILE
 static char THIS_FILE[] = __FILE__;
 #endif
-
+// 功能：ToDialogTextByACP，将 Unicode 字符串转换为当前对话框编码。
+static CString ToDialogTextByACP(const wchar_t* textW);
+// 功能：ShowMsgByACP，按当前编码显示提示框文本。
+static void ShowMsgByACP(const wchar_t* textW);
 /////////////////////////////////////////////////////////////////////////////
 // CComDlg 对话框
 
@@ -29,8 +32,10 @@ CComDlg::CComDlg(CWnd* pParent /*=NULL*/)
 	m_password = _T("");
 }
 
+// 功能：绑定压缩设置对话框控件和成员变量。
 void CComDlg::DoDataExchange(CDataExchange* pDX)
 {
+	// 代码段功能：执行 DDX/DDV 数据交换。
 	CDialog::DoDataExchange(pDX);
 	//{{AFX_DATA_MAP(CComDlg)
 	DDX_Radio(pDX, IDC_RADIO1, m_Extend);
@@ -53,14 +58,18 @@ END_MESSAGE_MAP()
 /////////////////////////////////////////////////////////////////////////////
 // CComDlg 消息处理
 
+// 功能：处理“取消”按钮，关闭压缩设置对话框。
 void CComDlg::OnCancel()
 {
+	// 代码段功能：返回 IDCANCEL 给调用方。
 	EndDialog(IDCANCEL);
 }
 
-// 读取输入路径并转成 ANSI，兼容当前 Huffman 接口
+// 读取输入路径并转换为 ANSI，便于当前 Huffman 接口使用。
+// 功能：获取待压缩文件路径。
 BOOL CComDlg::GetInputPath(char outPath[500])
 {
+	// 代码段功能：从编辑框读取路径并做编码转换与校验。
 	if (outPath == NULL)
 		return FALSE;
 
@@ -70,7 +79,7 @@ BOOL CComDlg::GetInputPath(char outPath[500])
 #ifdef _UNICODE
 	if (WideCharToMultiByte(CP_ACP, 0, loadPathText, -1, outPath, 500, NULL, NULL) == 0)
 	{
-		AfxMessageBox(_T("路径转换失败！"));
+		AfxMessageBox(ToDialogTextByACP(L"路径转换失败！"));
 		return FALSE;
 	}
 #else
@@ -80,15 +89,17 @@ BOOL CComDlg::GetInputPath(char outPath[500])
 
 	if (outPath[0] == '\0')
 	{
-		AfxMessageBox(_T("请选择要压缩的文本文件！"));
+		AfxMessageBox(ToDialogTextByACP(L"请选择要压缩的文本文件！"));
 		return FALSE;
 	}
 	return TRUE;
 }
 
-// 将密码转换为 ANSI 字节串，供 MD5 和加密使用
+// 将密码转换为 ANSI 字节串，供 MD5 与加密流程使用。
+// 功能：获取并转换密码为 ANSI。
 BOOL CComDlg::GetPasswordA(char outPass[129])
 {
+	// 代码段功能：把当前对话框中的密码转换为 ANSI 字节。
 	if (outPass == NULL)
 		return FALSE;
 
@@ -99,7 +110,7 @@ BOOL CComDlg::GetPasswordA(char outPass[129])
 #ifdef _UNICODE
 	if (WideCharToMultiByte(CP_ACP, 0, m_password, -1, outPass, 129, NULL, NULL) == 0)
 	{
-		AfxMessageBox(_T("密码编码转换失败！"));
+		AfxMessageBox(ToDialogTextByACP(L"密码文本转换失败！"));
 		return FALSE;
 	}
 #else
@@ -108,10 +119,34 @@ BOOL CComDlg::GetPasswordA(char outPass[129])
 #endif
 	return TRUE;
 }
+// 功能：ToDialogTextByACP，把 Unicode 文本转换为当前进程使用的 TCHAR 文本。
+static CString ToDialogTextByACP(const wchar_t* textW)
+{
+	// 代码段功能：在非 Unicode 编译下按 ACP 编码转换，避免中文乱码。
+	if (textW == NULL)
+		return _T("");
+#ifdef _UNICODE
+	return CString(textW);
+#else
+	char textA[1024] = {0};
+	if (WideCharToMultiByte(CP_ACP, 0, textW, -1, textA, sizeof(textA), NULL, NULL) <= 0)
+		return _T("");
+	return CString(textA);
+#endif
+}
 
-// 对选中文件进行压缩，并按选项执行密码与 CRC 校验
+// 功能：ShowMsgByACP，统一消息框文本显示，避免直接弹框时中文乱码。
+static void ShowMsgByACP(const wchar_t* textW)
+{
+	// 代码段功能：通过统一转换后调用 AfxMessageBox。
+	AfxMessageBox(ToDialogTextByACP(textW));
+}
+
+// 根据选中文件和压缩参数执行压缩，并按选项执行删除或 CRC 校验。
+// 功能：执行压缩流程。
 void CComDlg::OnOk()
 {
+	// 代码段功能：同步界面状态、校验输入、执行压缩与可选校验。
 	UpdateData(TRUE);
 
 	char loadPath[500] = {0};
@@ -120,24 +155,25 @@ void CComDlg::OnOk()
 
 	if (m_isLock && m_password.IsEmpty())
 	{
-		AfxMessageBox(_T("已勾选锁定压缩文件，请先设置密码！"));
+		ShowMsgByACP(L"已勾选加密压缩文件，请先设置密码！");
 		return;
 	}
 
+	// 代码段功能：执行哈夫曼压缩并计算压缩前 CRC32。
 	Huffman huffman;
 	huffman.ReadTextFromFile(loadPath);
 	if (huffman.FileSize(loadPath) <= 0)
 	{
-		AfxMessageBox(_T("源文件为空，无法压缩！"));
+		ShowMsgByACP(L"源文件为空，无法压缩！");
 		return;
 	}
 
 	huffman.CountCharsWeight();
 	huffman.MakeCharMap();
 	huffman.Encode();
-
 	unsigned long crcBefore = huffman.GetTextCRC32();
 
+	// 代码段功能：生成压缩包路径并写入压缩数据。
 	char codePath[500] = {0};
 	strncpy(codePath, loadPath, sizeof(codePath) - 1);
 	codePath[sizeof(codePath) - 1] = '\0';
@@ -155,36 +191,39 @@ void CComDlg::OnOk()
 	if (!huffman.SaveCodeToFile(codePath, pEncryptPass, crcBefore))
 		return;
 
-	// 勾选“测试压缩文件”时，立即重读+解压并做 CRC32 对比
+	// 代码段功能：勾选测试选项时，重读压缩包并比对 CRC32。
 	if (m_isCheck)
 	{
 		Huffman verify;
 		if (!verify.ReadCodeFromFile(codePath, pEncryptPass))
 		{
-			AfxMessageBox(_T("测试压缩文件失败：无法读取压缩包或密码校验失败！"));
+			ShowMsgByACP(L"测试压缩文件失败，无法读取压缩包内容，校验失败！");
 			return;
 		}
 		verify.Decode();
 		unsigned long crcAfter = verify.GetTextCRC32();
 		if (crcAfter != crcBefore)
 		{
-			AfxMessageBox(_T("CRC 校验失败：压缩前后内容不一致！"));
+			ShowMsgByACP(L"CRC校验失败，压缩前后数据不一致！");
 			return;
 		}
 	}
 
+	// 代码段功能：若用户勾选删除源文件，执行删除并提示结果。
 	if (m_isDelete)
 	{
 		if (_unlink(loadPath) != 0)
-			AfxMessageBox(_T("提示：压缩完成，但删除源文件失败。"));
+			ShowMsgByACP(L"提示：压缩完成，但删除源文件失败。");
 	}
 
-	AfxMessageBox(_T("压缩完成。"));
+	ShowMsgByACP(L"压缩完成。");
 	EndDialog(IDOK);
 }
 
+// 功能：向下拉框添加中文文本（含编码转换）。
 static void AddComboTextByACP(CComboBox* pCombo, const wchar_t* textW)
 {
+	// 代码段功能：根据编译字符集选择直接添加或先转码再添加。
 	if (pCombo == NULL || textW == NULL)
 		return;
 #ifdef _UNICODE
@@ -196,11 +235,13 @@ static void AddComboTextByACP(CComboBox* pCombo, const wchar_t* textW)
 #endif
 }
 
+// 功能：初始化压缩设置界面中的下拉选项。
 BOOL CComDlg::OnInitDialog()
 {
+	// 代码段功能：填充压缩方式/更新方式并设置默认项和下拉宽度。
 	CDialog::OnInitDialog();
 
-	// 初始化下拉框内容（使用 Unicode 转 ACP，确保 GBK 界面可见）
+	// 初始化组合框内容，使用 Unicode 转 ACP，确保 GBK 环境可见。
 	CComboBox* pMethod = (CComboBox*)GetDlgItem(IDC_COMBO2);
 	CComboBox* pUpdate = (CComboBox*)GetDlgItem(IDC_COMBO1);
 
@@ -229,15 +270,22 @@ BOOL CComDlg::OnInitDialog()
 	return TRUE;
 }
 
+// 功能：处理取消模式消息。
 void CComDlg::OnCancelMode()
 {
+	// 代码段功能：保持 CDialog 默认取消模式处理。
 	CDialog::OnCancelMode();
 }
 
-// 点击“设置密码”，输入并缓存压缩密码
+// 点击“设置密码”按钮，输入并更新压缩密码。
+// 功能：设置或清除压缩密码。
 void CComDlg::OnSetpass()
 {
-	CPassDlg dlg(_T("设置压缩密码"), _T("请输入压缩密码（留空表示清除密码）："), this);
+	// 代码段功能：弹出密码输入框并更新“加密压缩文件”状态。
+	CPassDlg dlg(
+		ToDialogTextByACP(L"设置压缩密码"),
+		ToDialogTextByACP(L"请输入压缩密码（留空表示清除密码）"),
+		this);
 	dlg.m_password = m_password;
 	if (dlg.DoModal() == IDOK)
 	{
@@ -245,22 +293,24 @@ void CComDlg::OnSetpass()
 		if (m_password.IsEmpty())
 		{
 			m_isLock = FALSE;
-			AfxMessageBox(_T("已清除压缩密码。"));
+			ShowMsgByACP(L"已清除压缩密码。");
 		}
 		else
 		{
 			m_isLock = TRUE;
-			AfxMessageBox(_T("压缩密码设置成功。"));
+			ShowMsgByACP(L"压缩密码设置成功。");
 		}
 		UpdateData(FALSE);
 	}
 }
 
+// 功能：浏览并选择待压缩文本文件。
 void CComDlg::OnOpen()
 {
+	// 代码段功能：打开文件对话框并把选中的路径回填到输入框。
 	CString m_strFileName;
-	LPCTSTR szFilter = _T("文本文件(*.txt)|*.txt|所有文件(*.*)|*.*||");
-	CFileDialog fileDlg(TRUE, NULL, NULL, OFN_HIDEREADONLY | OFN_OVERWRITEPROMPT, szFilter, NULL);
+	CString szFilter = ToDialogTextByACP(L"文本文件(*.txt)|*.txt|所有文件(*.*)|*.*||");
+	CFileDialog fileDlg(TRUE, NULL, NULL, OFN_HIDEREADONLY | OFN_OVERWRITEPROMPT, (LPCTSTR)szFilter, this);
 
 	if (fileDlg.DoModal() == IDOK)
 	{
