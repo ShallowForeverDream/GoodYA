@@ -45,7 +45,13 @@ CGoodYaApp theApp;
 /////////////////////////////////////////////////////////////////////////////
 // CGoodYaApp 初始化
 
-// 功能：初始化 MFC 应用、文档模板与主窗口。
+/**
+ * 功能：初始化 MFC 应用、文档模板与主窗口。
+ * 设置控制容器、注册文档模板并显示主窗口。
+ * @return BOOL
+ * @author zxl
+ * @date 2024-06-01
+ */
 BOOL CGoodYaApp::InitInstance()
 {
 	AfxEnableControlContainer();
@@ -113,7 +119,13 @@ CAboutDlg::CAboutDlg() : CDialog(CAboutDlg::IDD)
 	//}}AFX_DATA_INIT
 }
 
-// 功能：执行关于对话框控件的数据交换。
+/**
+ * 功能：执行关于对话框控件的数据交换。
+ * @param CDataExchange* pDX
+ * @return void
+ * @author zxl
+ * @date 2024-06-01
+ */
 void CAboutDlg::DoDataExchange(CDataExchange* pDX)
 {
 	CDialog::DoDataExchange(pDX);
@@ -126,7 +138,13 @@ BEGIN_MESSAGE_MAP(CAboutDlg, CDialog)
 	//}}AFX_MSG_MAP
 END_MESSAGE_MAP()
 
-// 功能：显示“关于”对话框。
+/**
+ * 功能：显示“关于”对话框。
+ * 弹出关于对话框并阻塞直到关闭。
+ * @return void
+ * @author zxl
+ * @date 2024-06-01
+ */
 void CGoodYaApp::OnAppAbout()
 {
 	CAboutDlg aboutDlg;

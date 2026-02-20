@@ -2,26 +2,28 @@
 
 [General Info]
 Version=1
-LastClass=CComDlg
+LastClass=CPassDlg
 LastTemplate=CDialog
 NewFileInclude1=#include "stdafx.h"
 NewFileInclude2=#include "GoodYa.h"
 LastPage=0
 
-ClassCount=7
+ClassCount=8
 Class1=CGoodYaApp
 Class2=CGoodYaDoc
 Class3=CGoodYaView
 Class4=CMainFrame
 
-ResourceCount=4
+ResourceCount=5
 Resource1=IDR_MAINFRAME
-Resource2=IDD_ABOUTBOX
-Resource3=IDD_DIALOG1
+Resource2=IDD_DIALOG1
+Resource3=IDD_DIALOG2
 Class5=CAboutDlg
 Class6=CComDlg
 Class7=CDecDlg
-Resource4=IDD_DIALOG2
+Resource4=IDD_ABOUTBOX
+Class8=CPassDlg
+Resource5=IDD_PASSDLG
 
 [CLS:CGoodYaApp]
 Type=0
@@ -143,7 +145,7 @@ Control4=IDC_STATIC,button,1342177287
 Control5=IDC_RADIO1,button,1342308361
 Control6=IDC_RADIO2,button,1342177289
 Control7=IDC_STATIC,static,1342308352
-Control8=IDC_COMBO1,combobox,1344339970
+Control8=IDC_COMBO1,combobox,1344339971
 Control9=IDC_STATIC,static,1342308352
 Control10=IDC_COMBO2,combobox,1344339971
 Control11=IDC_SETPASS,button,1342242816
@@ -191,4 +193,21 @@ BaseClass=CDialog
 Filter=D
 LastObject=CDecDlg
 VirtualFilter=dWC
+
+[DLG:IDD_PASSDLG]
+Type=1
+Class=CPassDlg
+ControlCount=4
+Control1=IDC_STATIC_PASS_PROMPT,static,1342308352
+Control2=IDC_EDIT_PASS,edit,1350631584
+Control3=IDOK,button,1342242817
+Control4=IDCANCEL,button,1342242816
+
+[CLS:CPassDlg]
+Type=0
+HeaderFile=PassDlg.h
+ImplementationFile=PassDlg.cpp
+BaseClass=CDialog
+Filter=D
+LastObject=CPassDlg
 

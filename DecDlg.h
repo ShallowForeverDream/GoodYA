@@ -48,6 +48,7 @@ protected:
 	DECLARE_MESSAGE_MAP()
 };
 
+
 //{{AFX_INSERT_LOCATION}}
 // Microsoft Visual C++ 将在以前一行之前插入附加声明。
 
