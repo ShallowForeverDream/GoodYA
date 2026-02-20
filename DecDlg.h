@@ -35,6 +35,8 @@ protected:
 	BOOL GetInputPath(char outPath[500]); // 读取输入框中的 .huf 文件路径
 	BOOL PromptPassword(CString& outPassword); // 弹框获取解压密码
 
+	// 注意：不再使用图标，树控件只显示文本层次结构
+
 	// 消息映射函数
 	//{{AFX_MSG(CDecDlg)
 	afx_msg void OnDecDlgCancel(); // 点击“取消”后关闭对话框
@@ -44,6 +46,9 @@ protected:
 	afx_msg void PopulateTree(HTREEITEM hParent, LPCTSTR path); // 递归填充目录树
 	virtual BOOL OnInitDialog(); // 初始化对话框显示状态
 	afx_msg void OnCancelMode(); // 取消模式消息，保持默认处理
+	// 树控件相关消息处理：
+	afx_msg void OnTvnItemExpanding(NMHDR* pNMHDR, LRESULT* pResult); // 当树节点将展开时填充子节点
+	afx_msg void OnTvnSelchangedTree1(NMHDR* pNMHDR, LRESULT* pResult); // 当选择变化时把完整路径回填到目标路径编辑框
 	//}}AFX_MSG
 	DECLARE_MESSAGE_MAP()
 };

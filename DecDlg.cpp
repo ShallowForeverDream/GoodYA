@@ -6,6 +6,7 @@
 #include "DecDlg.h"
 #include "Huffman.h"
 #include "PassDlg.h"
+#include <shellapi.h>
 
 #ifdef _DEBUG
 #define new DEBUG_NEW
@@ -66,6 +67,9 @@ BEGIN_MESSAGE_MAP(CDecDlg, CDialog)
 	ON_BN_CLICKED(IDC_BUTTON1, OnDecDlgOk)
 	ON_BN_CLICKED(IDC_BROWSE, OnBrowse)
 	ON_WM_CANCELMODE()
+	// 注册树控件的展开与选择变化通知，便于动态填充与回填路径
+	ON_NOTIFY(TVN_ITEMEXPANDING, IDC_TREE1, OnTvnItemExpanding)
+	ON_NOTIFY(TVN_SELCHANGED, IDC_TREE1, OnTvnSelchangedTree1)
 	//}}AFX_MSG_MAP
 END_MESSAGE_MAP()
 
@@ -227,9 +231,18 @@ BOOL CDecDlg::OnInitDialog()
 	// 代码段功能：初始化树控件内容。
 	CDialog::OnInitDialog();
 
+	// 增强树控件显示：启用层级线、展开按钮，并设置用于区分文件/文件夹的图标列表
 	HWND hWnd = m_treeCtrl.GetSafeHwnd();
 	if (hWnd != NULL)
+	{
+		// 增加树的样式以显示连接线和展开按钮（增强层次感）
+		m_treeCtrl.ModifyStyle(0, TVS_HASLINES | TVS_LINESATROOT | TVS_HASBUTTONS);
+
+		// 不使用图标：树仅显示文本，取消创建/绑定图像列表
+
+		// 初始化根节点（并为根填充一级子项）
 		InitTree();
+	}
 
 	return TRUE;
 }
@@ -238,38 +251,41 @@ BOOL CDecDlg::OnInitDialog()
 void CDecDlg::InitTree()
 {
 	// 代码段功能：先插入根目录节点，后续可按需递归展开。
-	HTREEITEM hRoot = m_treeCtrl.InsertItem(_T("D:\\"), TVI_ROOT, TVI_LAST);
-	UNREFERENCED_PARAMETER(hRoot);
-	// 若要展示完整目录结构，可启用以下递归调用。
-	// PopulateTree(hRoot, _T("D:\\"));
+	// 插入根节点并惰性填充一级子项（每个文件夹加入占位子项以显示可展开标志）
+		HTREEITEM hRoot = m_treeCtrl.InsertItem(_T("D:\\"), TVI_ROOT, TVI_LAST);
+		// 只填充根目录的第一层子项，避免一次性加载大量文件导致界面卡顿
+		PopulateTree(hRoot, _T("D:\\"));
 }
 
 // 功能：递归填充目录树。
 void CDecDlg::PopulateTree(HTREEITEM hParent, LPCTSTR path)
 {
-	// 代码段功能：枚举当前目录并把文件/子目录加入树控件。
-	CString fullPath;
+	// 代码段功能：惰性填充当前目录的一级子项。
+	// 对于子目录，仅插入一个空的占位子项以显示“可展开”符号，实际内容在展开时再枚举。
+	CString searchPath;
 	WIN32_FIND_DATA FindFileData;
 	HANDLE hFind = INVALID_HANDLE_VALUE;
 	CString strPath(path);
-	fullPath = strPath + _T("\\*.*");
-	hFind = FindFirstFile(fullPath, &FindFileData);
+	searchPath = strPath + _T("\\*.*");
+	hFind = FindFirstFile(searchPath, &FindFileData);
 	if (hFind == INVALID_HANDLE_VALUE)
 		return;
 
 	do
 	{
+		// 忽略 '.' 和 '..' 项
+		if (FindFileData.cFileName[0] == '.')
+			continue;
+
 		if (FindFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
 		{
-			if (FindFileData.cFileName[0] != '.')
-			{
-				CString subPath = strPath + _T("\\") + FindFileData.cFileName;
-				HTREEITEM hChild = m_treeCtrl.InsertItem(FindFileData.cFileName, hParent, TVI_LAST);
-				PopulateTree(hChild, subPath);
-			}
+			HTREEITEM hChild = m_treeCtrl.InsertItem(FindFileData.cFileName, hParent, TVI_LAST);
+			// 插入占位子项以显示可展开按钮
+			m_treeCtrl.InsertItem(_T(""), hChild, TVI_LAST); // 占位
 		}
 		else
 		{
+			// 插入文件节点（无子项），不使用图标
 			m_treeCtrl.InsertItem(FindFileData.cFileName, hParent, TVI_LAST);
 		}
 	} while (FindNextFile(hFind, &FindFileData));
@@ -282,4 +298,169 @@ void CDecDlg::OnCancelMode()
 {
 	// 代码段功能：保持 CDialog 默认取消模式处理。
 	CDialog::OnCancelMode();
+}
+
+// 功能：当用户展开某一节点时（TVN_ITEMEXPANDING），按需填充该节点的子项
+// 注：此处采用惰性填充策略——只有当节点没有子项时才枚举文件系统并插入子项，
+// 以避免一次性加载整个磁盘目录造成界面卡顿。所有中文注释使用 GBK 假定编码说明业务意图。
+void CDecDlg::OnTvnItemExpanding(NMHDR* pNMHDR, LRESULT* pResult)
+{
+	NMTREEVIEW* pNMTV = reinterpret_cast<NMTREEVIEW*>(pNMHDR);
+	if (pNMTV == NULL)
+	{
+		*pResult = 0;
+		return;
+	}
+
+	// 只在展开时填充（避免折叠时再次枚举）
+	if (pNMTV->action == TVE_EXPAND)
+	{
+		HTREEITEM hItem = pNMTV->itemNew.hItem;
+		if (hItem == NULL)
+		{
+			*pResult = 0;
+			return;
+		}
+
+		// 如果该节点已有子节点且第一个子项不是占位，则认为已填充过，跳过枚举
+		HTREEITEM hFirstChild = m_treeCtrl.GetChildItem(hItem);
+		if (hFirstChild == NULL)
+		{
+			*pResult = 0;
+			return;
+		}
+
+		CString firstText = m_treeCtrl.GetItemText(hFirstChild);
+		if (!firstText.IsEmpty())
+		{
+			// 已经填充过真实子项，直接返回
+			*pResult = 0;
+			return;
+		}
+
+		// 此时第一个子项为占位项，先删除所有占位子项，然后枚举目录真实内容并插入
+		// 删除所有子项占位
+		while (m_treeCtrl.GetChildItem(hItem) != NULL)
+		{
+			HTREEITEM hDel = m_treeCtrl.GetChildItem(hItem);
+			m_treeCtrl.DeleteItem(hDel);
+		}
+
+		// 从当前节点向上遍历构建完整路径
+		CStringArray parts;
+		HTREEITEM h = hItem;
+		while (h != NULL)
+		{
+			CString txt = m_treeCtrl.GetItemText(h);
+			parts.InsertAt(0, txt);
+			h = m_treeCtrl.GetParentItem(h);
+		}
+
+		if (parts.GetSize() == 0)
+		{
+			*pResult = 0;
+			return;
+		}
+
+		// 合并路径段，注意根节点可能已经包含反斜杠
+		CString fullPath = parts[0];
+		for (int i = 1; i < parts.GetSize(); ++i)
+		{
+			if (fullPath.Right(1) == "\\" || fullPath.Right(1) == ":")
+				fullPath += parts[i];
+			else
+				fullPath += "\\" + parts[i];
+		}
+
+		// 枚举 fullPath 下的一级子项并插入（目录插入占位子项）
+		WIN32_FIND_DATA FindFileData;
+		CString searchPath = fullPath + _T("\\*.*");
+		HANDLE hFind = FindFirstFile(searchPath, &FindFileData);
+		if (hFind != INVALID_HANDLE_VALUE)
+		{
+			do
+			{
+				if (FindFileData.cFileName[0] == '.')
+					continue;
+
+				if (FindFileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+				{
+					HTREEITEM hChild = m_treeCtrl.InsertItem(FindFileData.cFileName, hItem, TVI_LAST);
+					m_treeCtrl.InsertItem(_T(""), hChild, TVI_LAST); // 占位
+				}
+				else
+				{
+					// 文件：插入但不设置图标
+					m_treeCtrl.InsertItem(FindFileData.cFileName, hItem, TVI_LAST);
+				}
+			} while (FindNextFile(hFind, &FindFileData));
+
+			FindClose(hFind);
+		}
+	}
+
+	*pResult = 0;
+}
+
+// 功能：当树选择改变时，把选中项的完整路径回填至目标路径编辑框（IDC_EDIT2）
+// 行为：无论选中的是文件还是目录，都会把完整路径写入目标路径输入框，方便用户直接确认或修改。
+void CDecDlg::OnTvnSelchangedTree1(NMHDR* pNMHDR, LRESULT* pResult)
+{
+	NMTREEVIEW* pNMTV = reinterpret_cast<NMTREEVIEW*>(pNMHDR);
+	if (pNMTV == NULL)
+	{
+		*pResult = 0;
+		return;
+	}
+
+	HTREEITEM hItem = pNMTV->itemNew.hItem;
+	if (hItem == NULL)
+	{
+		*pResult = 0;
+		return;
+	}
+
+	// 构造从根到当前节点的路径段数组
+	CStringArray parts;
+	HTREEITEM h = hItem;
+	while (h != NULL)
+	{
+		CString txt = m_treeCtrl.GetItemText(h);
+		parts.InsertAt(0, txt);
+		h = m_treeCtrl.GetParentItem(h);
+	}
+
+	if (parts.GetSize() == 0)
+	{
+		*pResult = 0;
+		return;
+	}
+
+	CString fullPath = parts[0];
+	for (int i = 1; i < parts.GetSize(); ++i)
+	{
+		if (fullPath.Right(1) == "\\" || fullPath.Right(1) == ":")
+			fullPath += parts[i];
+		else
+			fullPath += "\\" + parts[i];
+	}
+
+	// 判断当前选中项是否为目录：若有子项则视为目录（我们为目录插入了占位子项），点击目录则展开/折叠，
+	// 点击文件则回填完整路径到目标路径编辑框
+	if (m_treeCtrl.GetChildItem(hItem) != NULL)
+	{
+		// 目录：切换展开/折叠状态
+		UINT state = m_treeCtrl.GetItemState(hItem, TVIS_EXPANDED);
+		if (state & TVIS_EXPANDED)
+			m_treeCtrl.Expand(hItem, TVE_COLLAPSE);
+		else
+			m_treeCtrl.Expand(hItem, TVE_EXPAND);
+	}
+	else
+	{
+		// 文件：回填到目标路径编辑框
+		SetDlgItemText(IDC_EDIT2, fullPath);
+	}
+
+	*pResult = 0;
 }
