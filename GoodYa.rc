@@ -248,7 +248,6 @@ BEGIN
     PUSHBUTTON      "浏览...",IDC_BROWSE,207,15,50,14
 END
 
-
 IDD_PASSDLG DIALOG DISCARDABLE  0, 0, 186, 66
 STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "输入密码"
@@ -259,6 +258,7 @@ BEGIN
     DEFPUSHBUTTON   "确定",IDOK,42,46,45,14
     PUSHBUTTON      "取消",IDCANCEL,100,46,45,14
 END
+
 
 #ifndef _MAC
 /////////////////////////////////////////////////////////////////////////////
