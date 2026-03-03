@@ -15,13 +15,13 @@ Class3=CGoodYaView
 Class4=CMainFrame
 
 ResourceCount=5
-Resource1=IDR_MAINFRAME
-Resource2=IDD_DIALOG1
-Resource3=IDD_DIALOG2
+Resource1=IDD_DIALOG1
+Resource2=IDR_MAINFRAME
+Resource3=IDD_ABOUTBOX
 Class5=CAboutDlg
 Class6=CComDlg
 Class7=CDecDlg
-Resource4=IDD_ABOUTBOX
+Resource4=IDD_DIALOG2
 Class8=CPassDlg
 Resource5=IDD_PASSDLG
 
