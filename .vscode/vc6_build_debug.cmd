@@ -1,7 +1,7 @@
 @echo off
 setlocal
 
-set "VC6ROOT=D:\Microsoft Visual Studio"
+set "VC6ROOT=D:\0tools\VC6\Microsoft Visual Studio"
 set "VCBIN=%VC6ROOT%\VC98\Bin"
 set "MSDEVBIN=%VC6ROOT%\Common\MSDev98\Bin"
 set "VCINC=%VC6ROOT%\VC98\INCLUDE"
