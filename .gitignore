@@ -2,17 +2,22 @@
 /Debug
 /_tmp_rar
 
+# VC6 generated metadata
 *.aps
 *.clw
-*.dsp
-*.dsw
 *.ncb
 *.opt
 *.plg
-*.rc
+
+# VC6/MSVC build outputs
 *.obj
 *.pch
 *.idb
 *.pdb
 *.ilk
 *.exe
+*.res
+*.sbr
+*.bsc
+
+# Keep source resource scripts (*.rc) tracked.
