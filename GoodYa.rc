@@ -186,7 +186,7 @@ FONT 9, "宋体"
 BEGIN
     ICON            IDR_MAINFRAME,IDC_STATIC,11,17,20,20
     LTEXT           "GoodYa 1.0 版",IDC_STATIC,40,10,119,8,SS_NOPREFIX
-    LTEXT           "版权所有 (C) 2026",IDC_STATIC,40,25,119,8
+    LTEXT           "湖北大学 版权所有（C）2026",IDC_STATIC,40,25,119,8
     DEFPUSHBUTTON   "确定",IDOK,178,7,50,14,WS_GROUP
 END
 
@@ -289,7 +289,7 @@ BEGIN
             VALUE "FileDescription", "GoodYa Microsoft 基础类应用程序\0"
             VALUE "FileVersion", "1, 0, 0, 1\0"
             VALUE "InternalName", "GoodYa\0"
-            VALUE "LegalCopyright", "版权所有 (C) 2026\0"
+            VALUE "LegalCopyright", "湖北大学 版权所有（C）2026\0"
             VALUE "LegalTrademarks", "\0"
             VALUE "OriginalFilename", "GoodYa.EXE\0"
             VALUE "ProductName", "GoodYa 应用程序\0"
@@ -487,4 +487,6 @@ LANGUAGE 4, 2
 
 /////////////////////////////////////////////////////////////////////////////
 #endif    // not APSTUDIO_INVOKED
+
+
 
