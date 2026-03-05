@@ -83,6 +83,23 @@ static void SetEditTextFromGbk(HWND hWndEdit, const CString& gbkText)
 	delete[] pWide;
 }
 
+// 功能：判断编辑框是否处于只读状态。
+static BOOL IsEditReadOnly(HWND hWndEdit)
+{
+	if (hWndEdit == NULL)
+		return TRUE;
+
+	LONG lStyle = ::GetWindowLong(hWndEdit, GWL_STYLE);
+	return ((lStyle & ES_READONLY) != 0);
+}
+
+// 功能：判断系统剪贴板中是否存在可粘贴文本。
+static BOOL HasClipboardText()
+{
+	return (::IsClipboardFormatAvailable(CF_UNICODETEXT) ||
+		::IsClipboardFormatAvailable(CF_TEXT));
+}
+
 /////////////////////////////////////////////////////////////////////////////
 // CGoodYaView
 
@@ -94,6 +111,16 @@ BEGIN_MESSAGE_MAP(CGoodYaView, CView)
 	ON_COMMAND(IDM_DEC, OnDecDlg)
 	ON_WM_SIZE()
 	ON_EN_CHANGE(IDC_PREVIEW_EDIT, OnPreviewEditChange)
+	ON_COMMAND(ID_EDIT_UNDO, OnEditUndo)
+	ON_COMMAND(ID_EDIT_CUT, OnEditCut)
+	ON_COMMAND(ID_EDIT_COPY, OnEditCopy)
+	ON_COMMAND(ID_EDIT_PASTE, OnEditPaste)
+	ON_COMMAND(ID_EDIT_SELECT_ALL, OnEditSelectAll)
+	ON_UPDATE_COMMAND_UI(ID_EDIT_UNDO, OnUpdateEditUndo)
+	ON_UPDATE_COMMAND_UI(ID_EDIT_CUT, OnUpdateEditCut)
+	ON_UPDATE_COMMAND_UI(ID_EDIT_COPY, OnUpdateEditCopy)
+	ON_UPDATE_COMMAND_UI(ID_EDIT_PASTE, OnUpdateEditPaste)
+	ON_UPDATE_COMMAND_UI(ID_EDIT_SELECT_ALL, OnUpdateEditSelectAll)
 	//}}AFX_MSG_MAP
 	ON_COMMAND(ID_FILE_PRINT, CView::OnFilePrint)
 	ON_COMMAND(ID_FILE_PRINT_DIRECT, CView::OnFilePrint)
@@ -297,3 +324,150 @@ void CGoodYaView::OnPreviewEditChange()
 
 	UpdateDocumentFromEdit();
 }
+
+
+// 功能：撤销编辑框最近一次可撤销的输入操作。
+void CGoodYaView::OnEditUndo()
+{
+	HWND hWndEdit = m_previewEdit.GetSafeHwnd();
+	if (hWndEdit == NULL || IsEditReadOnly(hWndEdit))
+		return;
+
+	if (GetFocus() != &m_previewEdit)
+		m_previewEdit.SetFocus();
+
+	if (m_previewEdit.CanUndo())
+		m_previewEdit.Undo();
+}
+
+// 功能：剪切编辑框当前选中文本到剪贴板。
+void CGoodYaView::OnEditCut()
+{
+	HWND hWndEdit = m_previewEdit.GetSafeHwnd();
+	if (hWndEdit == NULL || IsEditReadOnly(hWndEdit))
+		return;
+
+	int nStart = 0;
+	int nEnd = 0;
+	m_previewEdit.GetSel(nStart, nEnd);
+	if (nStart == nEnd)
+		return;
+
+	if (GetFocus() != &m_previewEdit)
+		m_previewEdit.SetFocus();
+
+	m_previewEdit.Cut();
+}
+
+// 功能：复制编辑框当前选中文本到剪贴板。
+void CGoodYaView::OnEditCopy()
+{
+	if (m_previewEdit.GetSafeHwnd() == NULL)
+		return;
+
+	int nStart = 0;
+	int nEnd = 0;
+	m_previewEdit.GetSel(nStart, nEnd);
+	if (nStart == nEnd)
+		return;
+
+	if (GetFocus() != &m_previewEdit)
+		m_previewEdit.SetFocus();
+
+	m_previewEdit.Copy();
+}
+
+// 功能：把剪贴板中的文本粘贴到编辑框当前光标位置。
+void CGoodYaView::OnEditPaste()
+{
+	HWND hWndEdit = m_previewEdit.GetSafeHwnd();
+	if (hWndEdit == NULL || IsEditReadOnly(hWndEdit))
+		return;
+
+	if (!HasClipboardText())
+		return;
+
+	if (GetFocus() != &m_previewEdit)
+		m_previewEdit.SetFocus();
+
+	m_previewEdit.Paste();
+}
+
+// 功能：选中编辑框中的全部文本。
+void CGoodYaView::OnEditSelectAll()
+{
+	if (m_previewEdit.GetSafeHwnd() == NULL)
+		return;
+
+	if (GetFocus() != &m_previewEdit)
+		m_previewEdit.SetFocus();
+
+	m_previewEdit.SetSel(0, -1);
+}
+
+// 功能：仅当编辑框可撤销时启用“撤销”。
+void CGoodYaView::OnUpdateEditUndo(CCmdUI* pCmdUI)
+{
+	BOOL bEnable = FALSE;
+	HWND hWndEdit = m_previewEdit.GetSafeHwnd();
+	if (hWndEdit != NULL && !IsEditReadOnly(hWndEdit))
+		bEnable = m_previewEdit.CanUndo();
+
+	pCmdUI->Enable(bEnable);
+}
+
+// 功能：仅当存在选区且可编辑时启用“剪切”。
+void CGoodYaView::OnUpdateEditCut(CCmdUI* pCmdUI)
+{
+	BOOL bEnable = FALSE;
+	HWND hWndEdit = m_previewEdit.GetSafeHwnd();
+	if (hWndEdit != NULL && !IsEditReadOnly(hWndEdit))
+	{
+		int nStart = 0;
+		int nEnd = 0;
+		m_previewEdit.GetSel(nStart, nEnd);
+		bEnable = (nStart != nEnd);
+	}
+
+	pCmdUI->Enable(bEnable);
+}
+
+// 功能：仅当存在选区时启用“复制”。
+void CGoodYaView::OnUpdateEditCopy(CCmdUI* pCmdUI)
+{
+	BOOL bEnable = FALSE;
+	if (m_previewEdit.GetSafeHwnd() != NULL)
+	{
+		int nStart = 0;
+		int nEnd = 0;
+		m_previewEdit.GetSel(nStart, nEnd);
+		bEnable = (nStart != nEnd);
+	}
+
+	pCmdUI->Enable(bEnable);
+}
+
+// 功能：仅当剪贴板有文本且编辑框可写时启用“粘贴”。
+void CGoodYaView::OnUpdateEditPaste(CCmdUI* pCmdUI)
+{
+	BOOL bEnable = FALSE;
+	HWND hWndEdit = m_previewEdit.GetSafeHwnd();
+	if (hWndEdit != NULL && !IsEditReadOnly(hWndEdit))
+		bEnable = HasClipboardText();
+
+	pCmdUI->Enable(bEnable);
+}
+
+
+
+// 功能：仅当编辑框存在文本时启用“全选”。
+void CGoodYaView::OnUpdateEditSelectAll(CCmdUI* pCmdUI)
+{
+	BOOL bEnable = FALSE;
+	HWND hWndEdit = m_previewEdit.GetSafeHwnd();
+	if (hWndEdit != NULL)
+		bEnable = (::GetWindowTextLength(hWndEdit) > 0);
+
+	pCmdUI->Enable(bEnable);
+}
+

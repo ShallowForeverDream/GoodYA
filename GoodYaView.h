@@ -50,6 +50,16 @@ protected:
 	afx_msg void OnDecDlg(); // 打开解压设置对话框
 	afx_msg void OnSize(UINT nType, int cx, int cy); // 处理窗口尺寸变化
 	afx_msg void OnPreviewEditChange(); // 响应编辑框文本变化
+	afx_msg void OnEditUndo(); // 撤销编辑区最后一步操作
+	afx_msg void OnEditCut(); // 剪切编辑区当前选中内容
+	afx_msg void OnEditCopy(); // 复制编辑区当前选中内容
+	afx_msg void OnEditPaste(); // 粘贴剪贴板文本到编辑区
+	afx_msg void OnEditSelectAll(); // 全选编辑区文本
+	afx_msg void OnUpdateEditSelectAll(CCmdUI* pCmdUI); // 更新全选菜单可用性
+	afx_msg void OnUpdateEditUndo(CCmdUI* pCmdUI); // 更新撤销菜单可用性
+	afx_msg void OnUpdateEditCut(CCmdUI* pCmdUI); // 更新剪切菜单可用性
+	afx_msg void OnUpdateEditCopy(CCmdUI* pCmdUI); // 更新复制菜单可用性
+	afx_msg void OnUpdateEditPaste(CCmdUI* pCmdUI); // 更新粘贴菜单可用性
 	//}}AFX_MSG
 	DECLARE_MESSAGE_MAP()
 };
@@ -65,3 +75,6 @@ inline CGoodYaDoc* CGoodYaView::GetDocument()
 // Microsoft Visual C++ 将在以前一行之前插入附加声明。
 
 #endif // !defined(AFX_GOODYAVIEW_H__30F1EF70_D7D9_484D_A876_F637169A22D4__INCLUDED_)
+
+
+
