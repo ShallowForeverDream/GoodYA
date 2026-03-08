@@ -12,17 +12,34 @@
 
 namespace {
 
+// ============================================================================
+// ZJH 编解码模块说明（论文注释版）
+// 1) 当前模块负责 .zjh 文件的压缩、解压、密码封装与包信息探测。
+// 2) 压缩核心采用“按 len 位分组 + 哈夫曼编码 + 可重前缀唯一可解校验/调整”。
+// 3) 生成格式优先使用 ENC2；解码兼容 ENC2、ENC1 以及历史 ZJH1 容器。
+// 4) 当启用密码时，先对编码负载做异或流混淆，再在文件尾写入密码尾标记：
+//    [ "ZJHPWD1"(7字节) | flag(1字节) | hash32(4字节) ]。
+// 5) 代码面向 VC6，避免使用 C++11 新语法；注释使用中文，便于论文阐述实现细节。
+// ============================================================================
+
+// len 的合法范围：每个“符号”由 1~10 个 bit 组成。
 const int MAX_LEN = 10;
 const int MAX_SYMBOLS = (1 << MAX_LEN);
 
+// 三类负载魔数：
+// ENC1: 早期表项自带码字位串版本；
+// ENC2: 新版“表头 + 表位流 + 数据位流”版本；
+// ZJH1: 更早期/历史容器格式（本模块仅做兼容解码）。
 const char MAGIC_ENC1[4] = {'E', 'N', 'C', '1'};
 const char MAGIC_ENC2[4] = {'E', 'N', 'C', '2'};
 const char MAGIC_LEGACY[4] = {'Z', 'J', 'H', '1'};
 
+// 密码尾部标记。存在该尾部时，表示文件负载已加密，需密码参与解码。
 const char TAIL_MAGIC[] = "ZJHPWD1";
 const int TAIL_MAGIC_LEN = 7;
 const int TAIL_SIZE = TAIL_MAGIC_LEN + 1 + 4;
 
+// 历史 ZJH1 头结构（与旧实现保持二进制兼容）。
 struct LegacyHeader
 {
 	char magic[4];
@@ -35,6 +52,8 @@ struct LegacyHeader
 template <typename T>
 static void AppendPod(std::vector<unsigned char>& out, const T& value)
 {
+	// 将 POD 类型按“内存字节序”直接附加到缓冲区末尾。
+	// 注意：该项目的读写双方运行在同平台/同编译器环境，采用原生字节序。
 	size_t oldSize = out.size();
 	out.resize(oldSize + sizeof(T));
 	memcpy(&out[oldSize], &value, sizeof(T));
@@ -43,6 +62,7 @@ static void AppendPod(std::vector<unsigned char>& out, const T& value)
 template <typename T>
 static bool ReadPod(const std::vector<unsigned char>& in, size_t& offset, T& value)
 {
+	// 从 in[offset...] 读取一个 POD 对象，读取成功后推进 offset。
 	if (offset + sizeof(T) > in.size())
 		return false;
 	memcpy(&value, &in[offset], sizeof(T));
@@ -52,11 +72,14 @@ static bool ReadPod(const std::vector<unsigned char>& in, size_t& offset, T& val
 
 static unsigned __int64 BytesForBits(unsigned __int64 bitCount)
 {
+	// bit 数转字节数（向上取整）。
 	return (bitCount + 7) / 8;
 }
 
 static int GetBitFromBytes(const unsigned char* bytes, unsigned __int64 bitIndex)
 {
+	// 位序约定：高位在前（MSB first）。
+	// 即每个字节按 bit7, bit6, ... bit0 的顺序读取。
 	unsigned __int64 byteIndex64 = bitIndex >> 3;
 	int bitInByte = 7 - (int)(bitIndex & 7);
 	size_t byteIndex = (size_t)byteIndex64;
@@ -65,6 +88,7 @@ static int GetBitFromBytes(const unsigned char* bytes, unsigned __int64 bitIndex
 
 static bool ReadAllBytes(const std::string& path, std::vector<unsigned char>& out)
 {
+	// 全文件二进制读取。
 	out.clear();
 	std::ifstream fin(path.c_str(), std::ios::binary);
 	if (!fin)
@@ -88,6 +112,7 @@ static bool ReadAllBytes(const std::string& path, std::vector<unsigned char>& ou
 
 static bool WriteAllBytes(const std::string& path, const std::vector<unsigned char>& data)
 {
+	// 全文件二进制覆盖写入。
 	std::ofstream fout(path.c_str(), std::ios::binary | std::ios::trunc);
 	if (!fout)
 		return false;
@@ -102,6 +127,7 @@ static bool WriteAllBytes(const std::string& path, const std::vector<unsigned ch
 
 static bool HasSuffixIgnoreCase(const std::string& text, const std::string& suffix)
 {
+	// 不区分大小写的后缀判断，主要用于验证 .zjh 扩展名。
 	if (text.size() < suffix.size())
 		return false;
 
@@ -120,6 +146,9 @@ static bool HasSuffixIgnoreCase(const std::string& text, const std::string& suff
 
 static unsigned long PasswordHash32(const char* password)
 {
+	// FNV-1a 32 位哈希：
+	// - 用于“密码是否正确”的快速校验，不承担抗碰撞的密码学安全职责；
+	// - 真正的数据保护由后续 XorCryptPayload 的流混淆实现（工程级轻量方案）。
 	if (password == NULL || password[0] == '\0')
 		return 0;
 
@@ -136,6 +165,9 @@ static unsigned long PasswordHash32(const char* password)
 
 static void XorCryptPayload(std::vector<unsigned char>& data, const char* password)
 {
+	// 轻量异或流混淆（可逆）：
+	// 同一函数可同时用于加密和解密（XOR 自反性）。
+	// 论文可描述为“基于口令扰动的伪随机密钥流”。
 	if (data.empty() || password == NULL || password[0] == '\0')
 		return;
 
@@ -160,6 +192,10 @@ static bool ParseTailInfo(const std::vector<unsigned char>& fileData,
 	unsigned long* hashOut,
 	size_t* payloadSize)
 {
+	// 尝试解析密码尾标记：
+	// - 若尾部不是 TAIL_MAGIC，则视为“无密码尾”，payload 为全文件；
+	// - 若匹配，则提取 hasPassword/hash/payload 截止位置。
+	// 返回 true 表示“解析过程无 I/O 级异常”，并不代表密码一定正确。
 	if (hasPassword) *hasPassword = false;
 	if (hashOut) *hashOut = 0;
 	if (payloadSize) *payloadSize = fileData.size();
@@ -184,6 +220,7 @@ static bool ParseTailInfo(const std::vector<unsigned char>& fileData,
 
 struct BitWriter
 {
+	// 位写入器：将离散 bit 序列按 MSB-first 打包到 bytes。
 	std::vector<unsigned char> bytes;
 	unsigned char current;
 	int used;
@@ -196,6 +233,7 @@ struct BitWriter
 
 	void pushBit(int bit)
 	{
+		// 每写入 8bit 输出一个字节。
 		current = (unsigned char)((current << 1) | (bit & 1));
 		++used;
 		++bitCount;
@@ -209,12 +247,14 @@ struct BitWriter
 
 	void pushCode(const std::string& code)
 	{
+		// 码字是由 '0'/'1' 字符组成的字符串表示。
 		for (size_t i = 0; i < code.size(); ++i)
 			pushBit(code[i] == '1' ? 1 : 0);
 	}
 
 	void flush()
 	{
+		// 末字节不足 8 位时左移补 0。
 		if (used == 0)
 			return;
 		current = (unsigned char)(current << (8 - used));
@@ -226,6 +266,7 @@ struct BitWriter
 
 struct EncTableEntry
 {
+	// 编码表项：符号值 + 码字。
 	unsigned short symbol;
 	std::string code;
 };
@@ -233,6 +274,7 @@ struct EncTableEntry
 class EncoderWorker
 {
 public:
+	// 核心入口：读取原文 -> 统计符号 -> 哈夫曼编码 -> 唯一可解调整 -> 输出 ENC2 负载。
 	EncoderWorker()
 		: len_(0), symbolLimit_(0), root_(NULL), originalBits_(0)
 	{
@@ -245,6 +287,7 @@ public:
 
 	bool run(const std::string& inputPath, int len, std::vector<unsigned char>& outPayload)
 	{
+		// 初始化运行时状态。
 		len_ = len;
 		symbolLimit_ = (1 << len_);
 		freq_.assign((size_t)symbolLimit_, 0);
@@ -263,6 +306,7 @@ public:
 
 		if (!inputSymbols_.empty())
 		{
+			// 非空输入时构建编码树与码表；空输入直接输出空负载结构。
 			buildHuffmanTree();
 			assignCodes(root_, "");
 			if (usedSymbols_.size() == 1)
@@ -276,6 +320,8 @@ public:
 private:
 	struct Node
 	{
+		// 哈夫曼树节点：
+		// symbol == -1 表示内部节点；否则为叶子节点（对应一个符号）。
 		int symbol;
 		Node* left;
 		Node* right;
@@ -289,6 +335,7 @@ private:
 
 	struct QueueInfo
 	{
+		// 优先队列项：按频次升序合并最小两棵子树。
 		unsigned __int64 count;
 		Node* node;
 
@@ -305,6 +352,7 @@ private:
 
 	struct QueueInfoGreater
 	{
+		// std::priority_queue 默认大顶堆，这里自定义为“小频次优先”。
 		bool operator()(const QueueInfo& a, const QueueInfo& b) const
 		{
 			return a.count > b.count;
@@ -313,6 +361,8 @@ private:
 
 	struct ACNode
 	{
+		// AC 自动机节点，用于“给定码字集合”上的线性 DP 分词计数。
+		// 目的：检测当前码表对目标位串是否“唯一可解”。
 		int next0;
 		int next1;
 		int fail;
@@ -341,6 +391,7 @@ private:
 
 	void clearNodes()
 	{
+		// 释放哈夫曼树节点，避免内存泄漏（VC6 无智能指针）。
 		for (size_t i = 0; i < nodes_.size(); ++i)
 			delete nodes_[i];
 		nodes_.clear();
@@ -348,6 +399,7 @@ private:
 
 	Node* makeNode(int symbol, Node* left, Node* right)
 	{
+		// 工厂方法：统一记录节点，便于统一释放。
 		Node* n = new Node(symbol, left, right);
 		nodes_.push_back(n);
 		return n;
@@ -355,6 +407,9 @@ private:
 
 	bool readInput(const std::string& inputPath)
 	{
+		// 按 len 位切片读取：
+		// - 每 len bit 形成一个 symbol；
+		// - 末尾不足 len 位时右侧补 0，再形成最后一个 symbol。
 		std::ifstream fin(inputPath.c_str(), std::ios::binary);
 		if (!fin)
 			return false;
@@ -399,6 +454,7 @@ private:
 
 	void buildHuffmanTree()
 	{
+		// 标准哈夫曼建树（按频次合并）。
 		std::priority_queue<QueueInfo, std::vector<QueueInfo>, QueueInfoGreater> pq;
 		for (size_t i = 0; i < usedSymbols_.size(); ++i)
 		{
@@ -423,6 +479,7 @@ private:
 
 	void assignCodes(Node* node, const std::string& current)
 	{
+		// DFS 生成码表：左边追加 0，右边追加 1。
 		if (node == NULL)
 			return;
 
@@ -436,6 +493,7 @@ private:
 
 	bool buildCheckBitstream()
 	{
+		// 将“输入符号序列”按当前码表展开为一条位串，用于唯一可解性验证。
 		size_t bitCount = 0;
 		for (size_t i = 0; i < inputSymbols_.size(); ++i)
 		{
@@ -459,6 +517,8 @@ private:
 
 	bool buildCheckAutomaton()
 	{
+		// 把“所有码字”构建为 AC 自动机：
+		// 运行时可在 O(m + 匹配数) 内找出每个位置的可结束码字长度。
 		acNodes_.clear();
 		acNodes_.push_back(ACNode());
 
@@ -540,6 +600,9 @@ private:
 
 	bool checkUniqueDecodeFast()
 	{
+		// 唯一可解判定（核心）：
+		// ways[i] 表示前 i 位的可分解方案数（截断到 0/1/2，2 表示“至少两种”）。
+		// 结论：ways[m] == 1 才是“唯一可解”。
 		if (!buildCheckBitstream())
 			return false;
 		if (checkBits_.empty())
@@ -576,6 +639,9 @@ private:
 
 	void relaxTreeForUniqueDecode()
 	{
+		// 可重前缀调整策略：
+		// 在 BFS 节点序上尝试“内部节点与叶子节点符号互换”，并实时做唯一可解校验；
+		// 一旦找到满足 unique decode 的方案即停止。
 		if (root_ == NULL)
 			return;
 
@@ -653,6 +719,11 @@ private:
 
 	bool writeOutputBytes(std::vector<unsigned char>& outPayload) const
 	{
+		// ENC2 输出布局：
+		// [magic=ENC2]
+		// [len(1)][reserved(1)][tableCnt(2)][symbolCnt(8)][originalBits(8)][tableBits(8)][encodedBits(8)]
+		// [table meta: symbol(2)+codeLen(2)] * tableCnt
+		// [table bitstream][data bitstream]
 		std::vector<EncTableEntry> table;
 		table.reserve(usedSymbols_.size());
 		for (size_t iUsed = 0; iUsed < usedSymbols_.size(); ++iUsed)
@@ -724,18 +795,21 @@ private:
 
 struct DecTableEntry
 {
+	// 解码侧码表项（与 EncTableEntry 含义一致）。
 	unsigned short symbol;
 	std::string code;
 };
 
 struct DecodeOutput
 {
+	// AC 终止输出：在当前位置可匹配到的“码字长度 + 对应符号”。
 	unsigned short length;
 	unsigned short symbol;
 };
 
 struct DecodeACNode
 {
+	// 解码 AC 自动机节点。
 	int next0;
 	int next1;
 	int fail;
@@ -749,6 +823,7 @@ struct DecodeACNode
 
 static bool AddDecodeOutputUnique(std::vector<DecodeOutput>& outs, unsigned short length, unsigned short symbol)
 {
+	// 同一节点可能因为 fail 链合并产生重复输出，这里去重。
 	for (size_t i = 0; i < outs.size(); ++i)
 	{
 		if (outs[i].length == length && outs[i].symbol == symbol)
@@ -764,6 +839,7 @@ static bool AddDecodeOutputUnique(std::vector<DecodeOutput>& outs, unsigned shor
 static bool BuildDecodeAutomaton(const std::vector<DecTableEntry>& table,
 	std::vector<DecodeACNode>& nodes)
 {
+	// 基于码表构建 AC 自动机，供“位串动态规划分词”使用。
 	nodes.clear();
 	nodes.push_back(DecodeACNode());
 
@@ -855,6 +931,11 @@ static bool DecodeSymbolsFromBits(const std::vector<DecTableEntry>& table,
 	unsigned __int64 expectedSymbolCount,
 	std::vector<unsigned short>& outSymbols)
 {
+	// 关键解码算法（论文重点）：
+	// 1) 先用 AC 自动机在位串上做线性扫描；
+	// 2) 对每个前缀位置做 DP 计数（0/1/2+），并记录唯一前驱；
+	// 3) 仅当 ways[m] == 1 时回溯重建符号序列。
+	// 该算法能够正确处理“可重前缀码”，避免贪心匹配误解码。
 	outSymbols.clear();
 
 	if (encodedBits == 0)
@@ -882,6 +963,7 @@ static bool DecodeSymbolsFromBits(const std::vector<DecTableEntry>& table,
 
 	for (size_t i = 0; i < bitCount; ++i)
 	{
+		// AC 状态转移到当前位置后，枚举所有可结束码字，更新 DP。
 		int bit = GetBitFromBytes(bitsData, (unsigned __int64)i);
 		state = (bit == 0) ? acNodes[(size_t)state].next0 : acNodes[(size_t)state].next1;
 
@@ -937,6 +1019,7 @@ static bool DecodeSymbolsFromBits(const std::vector<DecTableEntry>& table,
 	if (ways[bitCount] != 1)
 		return false;
 
+	// 通过唯一前驱链回溯出符号序列。
 	std::vector<unsigned short> reversed;
 	reversed.reserve((size_t)expectedSymbolCount > 0 ? (size_t)expectedSymbolCount : 16);
 
@@ -963,6 +1046,7 @@ static bool RebuildOriginalBytes(const std::vector<unsigned short>& symbols,
 	unsigned __int64 originalBits,
 	std::vector<unsigned char>& outBytes)
 {
+	// 将符号序列按每符号 len 位拼回原始字节流，并按 originalBits 截断到真实位数。
 	outBytes.clear();
 
 	if (len <= 0 || len > MAX_LEN)
@@ -1015,6 +1099,7 @@ static bool RebuildOriginalBytes(const std::vector<unsigned short>& symbols,
 
 static bool DecodeENC2PayloadToFile(const std::vector<unsigned char>& payload, const std::string& outputPath)
 {
+	// 按 ENC2 协议解析并解码到输出文件。
 	if (payload.size() < 4 + 1 + 1 + 2 + 8 + 8 + 8 + 8)
 		return false;
 	if (memcmp(&payload[0], MAGIC_ENC2, 4) != 0)
@@ -1072,6 +1157,7 @@ static bool DecodeENC2PayloadToFile(const std::vector<unsigned char>& payload, c
 	unsigned __int64 tableBitOffset = 0;
 	for (unsigned short ti = 0; ti < tableCnt; ++ti)
 	{
+		// 从 table 位流中按 codeLen 逐位恢复码字字符串。
 		unsigned short codeLen = tableCodeLens[(size_t)ti];
 		if (tableBitOffset + (unsigned __int64)codeLen > tableBits)
 			return false;
@@ -1111,6 +1197,7 @@ static bool DecodeENC2PayloadToFile(const std::vector<unsigned char>& payload, c
 
 static bool DecodeENC1PayloadToFile(const std::vector<unsigned char>& payload, const std::string& outputPath)
 {
+	// 按 ENC1 协议解析并解码到输出文件（兼容旧编码版本）。
 	if (payload.size() < 4 + 1 + 1 + 2 + 8 + 8 + 8)
 		return false;
 	if (memcmp(&payload[0], MAGIC_ENC1, 4) != 0)
@@ -1187,6 +1274,8 @@ static bool DecodeLegacyPayloadToFile(const std::vector<unsigned char>& payload,
 	const std::string& outputPath,
 	const char* password)
 {
+	// 历史 ZJH1 容器兼容解码：
+	// 结构为 [LegacyHeader][payload]，payload 可能做过口令异或混淆。
 	if (payload.size() < sizeof(LegacyHeader))
 		return false;
 
@@ -1216,6 +1305,7 @@ static bool EncodeEnc2Payload(const std::string& path,
 	int len,
 	std::vector<unsigned char>& payload)
 {
+	// 仅生成 ENC2 负载（不含密码尾与扩展名处理）。
 	if (len <= 0 || len > MAX_LEN)
 		return false;
 
@@ -1225,6 +1315,10 @@ static bool EncodeEnc2Payload(const std::string& path,
 
 static bool EncodeToFile(const std::string& path, int len, const char* password)
 {
+	// 压缩总入口：
+	// 1) 生成 ENC2 负载；
+	// 2) 若启用密码则混淆负载；
+	// 3) 追加密码尾标记并写成 .zjh 文件。
 	std::vector<unsigned char> payload;
 	if (!EncodeEnc2Payload(path, len, payload))
 		return false;
@@ -1253,6 +1347,10 @@ static bool DecodeToFile(const std::string& path,
 	const std::string& outputPath,
 	const char* password)
 {
+	// 解压总入口：
+	// 1) 解析密码尾标记；
+	// 2) 校验口令哈希（如有密码）；
+	// 3) 自动分流到 ENC2 / ENC1 / Legacy 解码器。
 	std::vector<unsigned char> fileData;
 	if (!ReadAllBytes(path, fileData))
 		return false;
@@ -1307,21 +1405,25 @@ static bool DecodeToFile(const std::string& path,
 
 bool ZJH_encrypto::encrypto(const std::string& path, int len)
 {
+	// 无密码压缩接口（默认入口）。
 	return EncodeToFile(path, len, NULL);
 }
 
 bool ZJH_encrypto1::encrypto(const std::string& path, int len, const char* password)
 {
+	// 带密码压缩接口（与界面“设置密码”选项对应）。
 	return EncodeToFile(path, len, password);
 }
 
 bool ZJH_encrypto2::encrypto(const std::string& path, int len)
 {
+	// 兼容保留接口：当前行为与 ZJH_encrypto::encrypto 一致。
 	return EncodeToFile(path, len, NULL);
 }
 
 bool ZJH_decrypto::decrypto(const std::string& path, const char* password)
 {
+	// 默认解压：输出路径为“去掉 .zjh 后缀”的同名文件。
 	if (!HasSuffixIgnoreCase(path, ".zjh"))
 		return false;
 
@@ -1331,11 +1433,16 @@ bool ZJH_decrypto::decrypto(const std::string& path, const char* password)
 
 bool ZJH_decrypto::decrypto_to(const std::string& path, const std::string& output_path, const char* password)
 {
+	// 指定输出路径的解压接口，供“测试解压到临时文件”等场景使用。
 	return DecodeToFile(path, output_path, password);
 }
 
 bool ZJH_GetPackageInfo(const std::string& path, bool* hasPassword)
 {
+	// 包信息探测接口：
+	// - 输出是否存在密码尾标记；
+	// - 在可判断的情况下验证负载魔数（ENC1/ENC2/Legacy）；
+	// - 若文件已加密，负载头会被混淆，此时仅返回“存在密码”信息。
 	if (hasPassword)
 		*hasPassword = false;
 
