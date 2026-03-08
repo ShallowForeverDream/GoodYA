@@ -217,7 +217,7 @@ CString CComDlg::FormatDurationText(unsigned long milliseconds) const
  * 功能：确保进度条与进度文本控件已创建。
  * 设计理由：
  * 1) 采用运行时创建，避免修改 .rc 资源导致编码/布局回归风险；
- * 2) 仅在 ZJH 压缩场景启用，不影响 HUF 路径与既有交互。
+ * 2) 同时服务 ZJH 与 HUF 两条压缩路径，避免维护两套显示控件。
  */
 void CComDlg::EnsureProgressUi()
 {
@@ -255,7 +255,7 @@ void CComDlg::ResetProgressUi()
 		return;
 
 	m_zjhProgress.SetPos(0);
-	m_zjhProgressText.SetWindowText(ToDialogTextByACP(L"ZJH压缩进度：等待开始"));
+	m_zjhProgressText.SetWindowText(ToDialogTextByACP(L"压缩进度：等待开始"));
 }
 
 /**
@@ -300,6 +300,14 @@ void CComDlg::UpdateProgressUi(int percent, int stage, unsigned long elapsedMs, 
 	const wchar_t* stageText = L"准备中";
 	switch (stage)
 	{
+	case HUF_PROGRESS_STAGE_PREPARE: stageText = L"准备压缩"; break;
+	case HUF_PROGRESS_STAGE_READ_INPUT: stageText = L"读取源文件"; break;
+	case HUF_PROGRESS_STAGE_COUNT_WEIGHT: stageText = L"统计字符频次"; break;
+	case HUF_PROGRESS_STAGE_BUILD_TREE: stageText = L"构建哈夫曼树"; break;
+	case HUF_PROGRESS_STAGE_ENCODE_DATA: stageText = L"生成编码数据"; break;
+	case HUF_PROGRESS_STAGE_WRITE_FILE: stageText = L"写入压缩文件"; break;
+	case HUF_PROGRESS_STAGE_DONE: stageText = L"压缩完成"; break;
+
 	case ZJH_PROGRESS_STAGE_READ_INPUT: stageText = L"读取源文件"; break;
 	case ZJH_PROGRESS_STAGE_BUILD_TREE: stageText = L"构建编码树"; break;
 	case ZJH_PROGRESS_STAGE_OPTIMIZE_CODE: stageText = L"调整可重前缀"; break;
@@ -388,9 +396,12 @@ void CComDlg::OnOk()
 	{
 		// 代码段功能：执行 HUF（哈夫曼）压缩并计算压缩前 CRC32。
 		Huffman huffman;
+		huffman.SetProgressCallback(CComDlg::OnZjhProgress, this);
+		SetCompressionUiEnabled(FALSE);
 		huffman.ReadTextFromFile(loadPath);
 		if (huffman.FileSize(loadPath) <= 0)
 		{
+			SetCompressionUiEnabled(TRUE);
 			ShowMsgByACP(L"源文件为空，无法压缩！");
 			return;
 		}
@@ -410,7 +421,10 @@ void CComDlg::OnOk()
 			strcat(codePath, ".huf");
 
 		if (!huffman.SaveCodeToFile(codePath, pEncryptPass, crcBefore))
+		{
+			SetCompressionUiEnabled(TRUE);
 			return;
+		}
 
 		// 代码段功能：勾选测试选项时，重读压缩包并比对 CRC32。
 		if (m_isCheck)
@@ -418,6 +432,7 @@ void CComDlg::OnOk()
 			Huffman verify;
 			if (!verify.ReadCodeFromFile(codePath, pEncryptPass))
 			{
+				SetCompressionUiEnabled(TRUE);
 				ShowMsgByACP(L"测试压缩文件失败，无法读取压缩包内容，校验失败！");
 				return;
 			}
@@ -425,10 +440,13 @@ void CComDlg::OnOk()
 			unsigned long crcAfter = verify.GetTextCRC32();
 			if (crcAfter != crcBefore)
 			{
+				SetCompressionUiEnabled(TRUE);
 				ShowMsgByACP(L"CRC校验失败，压缩前后数据不一致！");
 				return;
 			}
 		}
+
+		SetCompressionUiEnabled(TRUE);
 	}
 	else
 	{

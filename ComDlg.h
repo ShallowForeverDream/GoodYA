@@ -45,7 +45,7 @@ protected:
 	void SetCompressionUiEnabled(BOOL enabled); // 压缩期间禁用交互控件，避免重复触发
 	void UpdateProgressUi(int percent, int stage, unsigned long elapsedMs, unsigned long etaMs); // 刷新进度显示
 	CString FormatDurationText(unsigned long milliseconds) const; // 毫秒转中文可读时长
-	static void OnZjhProgress(int percent, int stage, unsigned long elapsedMs, unsigned long etaMs, void* userData); // zjh_codec 回调入口
+	static void OnZjhProgress(int percent, int stage, unsigned long elapsedMs, unsigned long etaMs, void* userData); // ZJH/HUF 统一进度回调入口
 
 	// 消息映射函数
 	//{{AFX_MSG(CComDlg)
