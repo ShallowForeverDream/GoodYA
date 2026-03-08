@@ -26,6 +26,9 @@ public:
 	//}}AFX_DATA
 
 	CString m_password; // 当前压缩密码（仅在本次对话生命周期内使用）
+	CProgressCtrl m_zjhProgress; // ZJH 压缩进度条（运行时动态创建）
+	CStatic m_zjhProgressText;   // ZJH 进度说明文本（显示阶段、耗时、ETA）
+	BOOL m_progressUiCreated;    // 是否已完成动态控件创建
 
 // 重写
 	//{{AFX_VIRTUAL(CComDlg)
@@ -37,6 +40,12 @@ protected:
 protected:
 	BOOL GetInputPath(char outPath[500]); // 读取输入框中的待压缩文件路径
 	BOOL GetPasswordA(char outPass[129]); // 将密码转换为 ANSI 字节串供底层算法使用
+	void EnsureProgressUi(); // 创建并初始化进度条控件
+	void ResetProgressUi(); // 重置进度显示文本和进度值
+	void SetCompressionUiEnabled(BOOL enabled); // 压缩期间禁用交互控件，避免重复触发
+	void UpdateProgressUi(int percent, int stage, unsigned long elapsedMs, unsigned long etaMs); // 刷新进度显示
+	CString FormatDurationText(unsigned long milliseconds) const; // 毫秒转中文可读时长
+	static void OnZjhProgress(int percent, int stage, unsigned long elapsedMs, unsigned long etaMs, void* userData); // ZJH/HUF 统一进度回调入口
 
 	// 消息映射函数
 	//{{AFX_MSG(CComDlg)

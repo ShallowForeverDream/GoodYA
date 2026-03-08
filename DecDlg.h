@@ -32,7 +32,7 @@ protected:
 
 // 实现
 protected:
-	BOOL GetInputPath(char outPath[500]); // 读取输入框中的 .huf 文件路径
+	BOOL GetInputPath(char outPath[500]); // 读取输入框中的 .huf/.zjh 文件路径
 	BOOL PromptPassword(CString& outPassword); // 弹框获取解压密码
 
 	// 注意：不再使用图标，树控件只显示文本层次结构
