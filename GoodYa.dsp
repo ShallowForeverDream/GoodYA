@@ -98,6 +98,10 @@ SOURCE=.\DecDlg.cpp
 # End Source File
 # Begin Source File
 
+SOURCE=.\zjh_codec.cpp
+# End Source File
+# Begin Source File
+
 SOURCE=.\GoodYa.cpp
 # End Source File
 # Begin Source File
@@ -172,6 +176,10 @@ SOURCE=.\Resource.h
 # Begin Source File
 
 SOURCE=.\StdAfx.h
+# End Source File
+# Begin Source File
+
+SOURCE=.\zjh_codec.h
 # End Source File
 # End Group
 # Begin Group "Resource Files"

@@ -6,6 +6,8 @@
 #include "ComDlg.h"
 #include "Huffman.h"
 #include "PassDlg.h"
+#include "zjh_codec.h"
+#include <string>
 #include <io.h>
 
 #ifdef _DEBUG
@@ -203,53 +205,95 @@ void CComDlg::OnOk()
 		return;
 	}
 
-	// 代码段功能：执行哈夫曼压缩并计算压缩前 CRC32。
-	Huffman huffman;
-	huffman.ReadTextFromFile(loadPath);
-	if (huffman.FileSize(loadPath) <= 0)
-	{
-		ShowMsgByACP(L"源文件为空，无法压缩！");
-		return;
-	}
-
-	huffman.CountCharsWeight();
-	huffman.MakeCharMap();
-	huffman.Encode();
-	unsigned long crcBefore = huffman.GetTextCRC32();
-
-	// 代码段功能：生成压缩包路径并写入压缩数据。
-	char codePath[500] = {0};
-	strncpy(codePath, loadPath, sizeof(codePath) - 1);
-	codePath[sizeof(codePath) - 1] = '\0';
-	char* pExt = strrchr(codePath, '.');
-	if (pExt != NULL)
-		strcpy(pExt + 1, "huf");
-	else
-		strcat(codePath, ".huf");
-
 	char passA[129] = {0};
 	if (!GetPasswordA(passA))
 		return;
-
 	const char* pEncryptPass = m_isLock ? passA : "";
-	if (!huffman.SaveCodeToFile(codePath, pEncryptPass, crcBefore))
-		return;
 
-	// 代码段功能：勾选测试选项时，重读压缩包并比对 CRC32。
-	if (m_isCheck)
+	if (m_Extend == 0)
 	{
-		Huffman verify;
-		if (!verify.ReadCodeFromFile(codePath, pEncryptPass))
+		// 代码段功能：执行 HUF（哈夫曼）压缩并计算压缩前 CRC32。
+		Huffman huffman;
+		huffman.ReadTextFromFile(loadPath);
+		if (huffman.FileSize(loadPath) <= 0)
 		{
-			ShowMsgByACP(L"测试压缩文件失败，无法读取压缩包内容，校验失败！");
+			ShowMsgByACP(L"源文件为空，无法压缩！");
 			return;
 		}
-		verify.Decode();
-		unsigned long crcAfter = verify.GetTextCRC32();
-		if (crcAfter != crcBefore)
-		{
-			ShowMsgByACP(L"CRC校验失败，压缩前后数据不一致！");
+
+		huffman.CountCharsWeight();
+		huffman.MakeCharMap();
+		huffman.Encode();
+		unsigned long crcBefore = huffman.GetTextCRC32();
+
+		char codePath[500] = {0};
+		strncpy(codePath, loadPath, sizeof(codePath) - 1);
+		codePath[sizeof(codePath) - 1] = '\0';
+		char* pExt = strrchr(codePath, '.');
+		if (pExt != NULL)
+			strcpy(pExt + 1, "huf");
+		else
+			strcat(codePath, ".huf");
+
+		if (!huffman.SaveCodeToFile(codePath, pEncryptPass, crcBefore))
 			return;
+
+		// 代码段功能：勾选测试选项时，重读压缩包并比对 CRC32。
+		if (m_isCheck)
+		{
+			Huffman verify;
+			if (!verify.ReadCodeFromFile(codePath, pEncryptPass))
+			{
+				ShowMsgByACP(L"测试压缩文件失败，无法读取压缩包内容，校验失败！");
+				return;
+			}
+			verify.Decode();
+			unsigned long crcAfter = verify.GetTextCRC32();
+			if (crcAfter != crcBefore)
+			{
+				ShowMsgByACP(L"CRC校验失败，压缩前后数据不一致！");
+				return;
+			}
+		}
+	}
+	else
+	{
+		// 代码段功能：执行 ZJH 可重前缀压缩，并按“设置密码”选项决定是否加密。
+		CComboBox* pMethod = (CComboBox*)GetDlgItem(IDC_COMBO2);
+		int methodSel = (pMethod != NULL) ? pMethod->GetCurSel() : 1;
+		int zjhLen = 8;
+		if (methodSel == 0)
+			zjhLen = 6;
+		else if (methodSel == 2)
+			zjhLen = 10;
+
+		ZJH_encrypto1 zjh;
+		if (!zjh.encrypto(std::string(loadPath), zjhLen, pEncryptPass))
+		{
+			ShowMsgByACP(L"ZJH压缩失败，请检查源文件与压缩参数！");
+			return;
+		}
+
+		char codePath[500] = {0};
+		strncpy(codePath, loadPath, sizeof(codePath) - 1);
+		codePath[sizeof(codePath) - 1] = '\0';
+		strcat(codePath, ".zjh");
+
+		// 代码段功能：勾选测试选项时，执行一次可解压校验（输出到临时文件并删除）。
+		if (m_isCheck)
+		{
+			char verifyOut[500] = {0};
+			strncpy(verifyOut, loadPath, sizeof(verifyOut) - 1);
+			verifyOut[sizeof(verifyOut) - 1] = '\0';
+			strcat(verifyOut, ".zjh.verify.tmp");
+
+			ZJH_decrypto verify;
+			if (!verify.decrypto_to(std::string(codePath), std::string(verifyOut), pEncryptPass))
+			{
+				ShowMsgByACP(L"测试压缩文件失败，ZJH压缩包无法正确解压！");
+				return;
+			}
+			_unlink(verifyOut);
 		}
 	}
 
