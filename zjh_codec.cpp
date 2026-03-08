@@ -49,6 +49,89 @@ struct LegacyHeader
 	unsigned char reserved[3];
 };
 
+// ============================================================================
+// 进度回调上下文（论文说明）
+// 1) 压缩过程由多个阶段组成，不同阶段工作量差异较大；
+// 2) 本实现把总进度映射到 [0,100]，并通过阶段枚举解释当前处理状态；
+// 3) ETA 采用“线性外推”估计：eta = elapsed * (100 - p) / p。
+//    该方式实现简单、开销极低，适合 VC6 单线程压缩流程。
+// ============================================================================
+struct ProgressContext
+{
+	ZJH_ProgressCallback callback;
+	void* userData;
+	DWORD startTick;
+	int lastPercent;
+	int lastStage;
+
+	ProgressContext(ZJH_ProgressCallback cb, void* ud)
+		: callback(cb), userData(ud), startTick(::GetTickCount()), lastPercent(-1), lastStage(-1)
+	{
+	}
+};
+
+static int ClampPercent(int percent)
+{
+	if (percent < 0) return 0;
+	if (percent > 100) return 100;
+	return percent;
+}
+
+static unsigned long CalcElapsedMs(DWORD startTick)
+{
+	DWORD now = ::GetTickCount();
+	return (unsigned long)(now - startTick);
+}
+
+static unsigned long CalcEtaMs(int percent, unsigned long elapsedMs)
+{
+	if (percent <= 0 || percent >= 100)
+		return 0;
+	unsigned __int64 remain = (unsigned __int64)elapsedMs * (unsigned __int64)(100 - percent);
+	return (unsigned long)(remain / (unsigned __int64)percent);
+}
+
+static void ReportProgress(ProgressContext* ctx, int percent, int stage, bool force)
+{
+	if (ctx == NULL || ctx->callback == NULL)
+		return;
+
+	percent = ClampPercent(percent);
+	if (!force && ctx->lastPercent == percent && ctx->lastStage == stage)
+		return;
+
+	unsigned long elapsedMs = CalcElapsedMs(ctx->startTick);
+	unsigned long etaMs = CalcEtaMs(percent, elapsedMs);
+	ctx->callback(percent, stage, elapsedMs, etaMs, ctx->userData);
+	ctx->lastPercent = percent;
+	ctx->lastStage = stage;
+}
+
+static void ReportStageProgress(ProgressContext* ctx,
+	int stage,
+	unsigned __int64 done,
+	unsigned __int64 total,
+	int startPercent,
+	int endPercent,
+	bool force)
+{
+	if (ctx == NULL || ctx->callback == NULL)
+		return;
+
+	if (total == 0)
+	{
+		ReportProgress(ctx, endPercent, stage, force);
+		return;
+	}
+
+	if (done > total)
+		done = total;
+
+	unsigned __int64 width = (unsigned __int64)(endPercent - startPercent);
+	int percent = startPercent + (int)((done * width) / total);
+	ReportProgress(ctx, percent, stage, force);
+}
+
 template <typename T>
 static void AppendPod(std::vector<unsigned char>& out, const T& value)
 {
@@ -125,6 +208,46 @@ static bool WriteAllBytes(const std::string& path, const std::vector<unsigned ch
 	return true;
 }
 
+static bool WriteAllBytesWithProgress(const std::string& path,
+	const std::vector<unsigned char>& data,
+	ProgressContext* progressCtx,
+	int stage,
+	int startPercent,
+	int endPercent)
+{
+	// 分块写盘并上报进度，避免“长时间写文件阶段”界面无响应。
+	std::ofstream fout(path.c_str(), std::ios::binary | std::ios::trunc);
+	if (!fout)
+		return false;
+
+	if (data.empty())
+	{
+		ReportProgress(progressCtx, endPercent, stage, true);
+		return true;
+	}
+
+	const size_t chunk = 64 * 1024;
+	size_t offset = 0;
+	while (offset < data.size())
+	{
+		size_t left = data.size() - offset;
+		size_t n = (left < chunk) ? left : chunk;
+		fout.write((const char*)(&data[offset]), (std::streamsize)n);
+		if (!fout)
+			return false;
+		offset += n;
+		ReportStageProgress(progressCtx,
+			stage,
+			(unsigned __int64)offset,
+			(unsigned __int64)data.size(),
+			startPercent,
+			endPercent,
+			(offset == data.size()));
+	}
+
+	return true;
+}
+
 static bool HasSuffixIgnoreCase(const std::string& text, const std::string& suffix)
 {
 	// 不区分大小写的后缀判断，主要用于验证 .zjh 扩展名。
@@ -163,17 +286,28 @@ static unsigned long PasswordHash32(const char* password)
 	return hash;
 }
 
-static void XorCryptPayload(std::vector<unsigned char>& data, const char* password)
+static void XorCryptPayload(std::vector<unsigned char>& data,
+	const char* password,
+	ProgressContext* progressCtx,
+	int stage,
+	int startPercent,
+	int endPercent)
 {
 	// 轻量异或流混淆（可逆）：
 	// 同一函数可同时用于加密和解密（XOR 自反性）。
 	// 论文可描述为“基于口令扰动的伪随机密钥流”。
 	if (data.empty() || password == NULL || password[0] == '\0')
+	{
+		ReportProgress(progressCtx, endPercent, stage, true);
 		return;
+	}
 
 	int passLen = (int)strlen(password);
 	if (passLen <= 0)
+	{
+		ReportProgress(progressCtx, endPercent, stage, true);
 		return;
+	}
 
 	unsigned long seed = 0xA5C39E7DUL;
 	for (size_t i = 0; i < data.size(); ++i)
@@ -184,6 +318,17 @@ static void XorCryptPayload(std::vector<unsigned char>& data, const char* passwo
 			(unsigned char)password[(i * 7 + 3) % (size_t)passLen] ^
 			(i & 0xFF));
 		data[i] ^= key;
+
+		if (((i & 0x3FFF) == 0) || (i + 1 == data.size()))
+		{
+			ReportStageProgress(progressCtx,
+				stage,
+				(unsigned __int64)(i + 1),
+				(unsigned __int64)data.size(),
+				startPercent,
+				endPercent,
+				(i + 1 == data.size()));
+		}
 	}
 }
 
@@ -276,7 +421,7 @@ class EncoderWorker
 public:
 	// 核心入口：读取原文 -> 统计符号 -> 哈夫曼编码 -> 唯一可解调整 -> 输出 ENC2 负载。
 	EncoderWorker()
-		: len_(0), symbolLimit_(0), root_(NULL), originalBits_(0)
+		: len_(0), symbolLimit_(0), root_(NULL), originalBits_(0), progressCtx_(NULL)
 	{
 	}
 
@@ -285,9 +430,14 @@ public:
 		clearNodes();
 	}
 
-	bool run(const std::string& inputPath, int len, std::vector<unsigned char>& outPayload)
+	bool run(const std::string& inputPath,
+		int len,
+		std::vector<unsigned char>& outPayload,
+		ProgressContext* progressCtx)
 	{
 		// 初始化运行时状态。
+		progressCtx_ = progressCtx;
+		ReportProgress(progressCtx_, 0, ZJH_PROGRESS_STAGE_PREPARE, true);
 		len_ = len;
 		symbolLimit_ = (1 << len_);
 		freq_.assign((size_t)symbolLimit_, 0);
@@ -307,11 +457,18 @@ public:
 		if (!inputSymbols_.empty())
 		{
 			// 非空输入时构建编码树与码表；空输入直接输出空负载结构。
+			ReportProgress(progressCtx_, 32, ZJH_PROGRESS_STAGE_BUILD_TREE, true);
 			buildHuffmanTree();
 			assignCodes(root_, "");
 			if (usedSymbols_.size() == 1)
 				codes_[(size_t)usedSymbols_[0]] = "0";
+			ReportProgress(progressCtx_, 45, ZJH_PROGRESS_STAGE_BUILD_TREE, true);
 			relaxTreeForUniqueDecode();
+		}
+		else
+		{
+			ReportProgress(progressCtx_, 45, ZJH_PROGRESS_STAGE_BUILD_TREE, true);
+			ReportProgress(progressCtx_, 65, ZJH_PROGRESS_STAGE_OPTIMIZE_CODE, true);
 		}
 
 		return writeOutputBytes(outPayload);
@@ -388,6 +545,7 @@ private:
 	std::vector<unsigned char> checkBits_;
 	std::vector<unsigned char> ways_;
 	std::vector<ACNode> acNodes_;
+	ProgressContext* progressCtx_;
 
 	void clearNodes()
 	{
@@ -414,12 +572,20 @@ private:
 		if (!fin)
 			return false;
 
+		fin.seekg(0, std::ios::end);
+		std::streamoff fileSize = fin.tellg();
+		if (fileSize < 0)
+			return false;
+		fin.seekg(0, std::ios::beg);
+
 		unsigned int current = 0;
 		int currentLen = 0;
 		char ch = 0;
+		unsigned __int64 bytesRead = 0;
 		while (fin.get(ch))
 		{
 			unsigned char byte = (unsigned char)ch;
+			++bytesRead;
 			originalBits_ += 8;
 			for (int bit = 7; bit >= 0; --bit)
 			{
@@ -433,6 +599,17 @@ private:
 					current = 0;
 					currentLen = 0;
 				}
+			}
+
+			if (((bytesRead & 0x0FFF) == 0) || (bytesRead == (unsigned __int64)fileSize))
+			{
+				ReportStageProgress(progressCtx_,
+					ZJH_PROGRESS_STAGE_READ_INPUT,
+					bytesRead,
+					(unsigned __int64)fileSize,
+					1,
+					30,
+					(bytesRead == (unsigned __int64)fileSize));
 			}
 		}
 
@@ -449,6 +626,8 @@ private:
 			if (freq_[(size_t)symbol] > 0)
 				usedSymbols_.push_back(symbol);
 		}
+		if (fileSize == 0)
+			ReportProgress(progressCtx_, 30, ZJH_PROGRESS_STAGE_READ_INPUT, true);
 		return true;
 	}
 
@@ -643,7 +822,12 @@ private:
 		// 在 BFS 节点序上尝试“内部节点与叶子节点符号互换”，并实时做唯一可解校验；
 		// 一旦找到满足 unique decode 的方案即停止。
 		if (root_ == NULL)
+		{
+			ReportProgress(progressCtx_, 65, ZJH_PROGRESS_STAGE_OPTIMIZE_CODE, true);
 			return;
+		}
+
+		ReportProgress(progressCtx_, 46, ZJH_PROGRESS_STAGE_OPTIMIZE_CODE, true);
 
 		std::vector<Node*> bfsNodes;
 		std::queue<Node*> q;
@@ -665,6 +849,11 @@ private:
 		}
 
 		int nodeCount = (int)bfsNodes.size();
+		unsigned __int64 totalChecks = 0;
+		for (int ti = 0; ti < nodeCount; ++ti)
+			totalChecks += (unsigned __int64)(nodeCount - ti - 1);
+		unsigned __int64 checked = 0;
+
 		for (int nodeIndex = 0; nodeIndex < nodeCount; ++nodeIndex)
 		{
 			Node* internal = bfsNodes[(size_t)nodeIndex];
@@ -673,6 +862,18 @@ private:
 
 			for (int j = nodeCount - 1; j > nodeIndex; --j)
 			{
+				++checked;
+				if (((checked & 0x3F) == 0) || checked == totalChecks)
+				{
+					ReportStageProgress(progressCtx_,
+						ZJH_PROGRESS_STAGE_OPTIMIZE_CODE,
+						checked,
+						(totalChecks == 0) ? 1 : totalChecks,
+						46,
+						65,
+						(checked == totalChecks));
+				}
+
 				Node* leaf = bfsNodes[(size_t)j];
 				if (leaf->symbol == -1)
 					continue;
@@ -700,7 +901,10 @@ private:
 				std::swap(internal->symbol, leaf->symbol);
 
 				if (checkUniqueDecodeFast())
+				{
+					ReportProgress(progressCtx_, 65, ZJH_PROGRESS_STAGE_OPTIMIZE_CODE, true);
 					return;
+				}
 
 				std::swap(internal->symbol, leaf->symbol);
 				codes_[(size_t)leafSymbol] = previousCode;
@@ -715,9 +919,11 @@ private:
 				codeCount[previousCode] = codeCount[previousCode] + 1;
 			}
 		}
+
+		ReportProgress(progressCtx_, 65, ZJH_PROGRESS_STAGE_OPTIMIZE_CODE, true);
 	}
 
-	bool writeOutputBytes(std::vector<unsigned char>& outPayload) const
+	bool writeOutputBytes(std::vector<unsigned char>& outPayload)
 	{
 		// ENC2 输出布局：
 		// [magic=ENC2]
@@ -738,10 +944,23 @@ private:
 				table.push_back(t);
 			}
 		}
+		ReportProgress(progressCtx_, 68, ZJH_PROGRESS_STAGE_PACK_OUTPUT, true);
 
 		BitWriter tableWriter;
 		for (size_t iTbl = 0; iTbl < table.size(); ++iTbl)
+		{
 			tableWriter.pushCode(table[iTbl].code);
+			if (((iTbl & 0x3F) == 0) || (iTbl + 1 == table.size()))
+			{
+				ReportStageProgress(progressCtx_,
+					ZJH_PROGRESS_STAGE_PACK_OUTPUT,
+					(unsigned __int64)(iTbl + 1),
+					(unsigned __int64)(table.empty() ? 1 : table.size()),
+					68,
+					74,
+					(iTbl + 1 == table.size()));
+			}
+		}
 		unsigned __int64 tableBits = tableWriter.bitCount;
 		tableWriter.flush();
 
@@ -753,6 +972,16 @@ private:
 			if (code.empty())
 				return false;
 			dataWriter.pushCode(code);
+			if (((iData & 0x3FF) == 0) || (iData + 1 == inputSymbols_.size()))
+			{
+				ReportStageProgress(progressCtx_,
+					ZJH_PROGRESS_STAGE_PACK_OUTPUT,
+					(unsigned __int64)(iData + 1),
+					(unsigned __int64)(inputSymbols_.empty() ? 1 : inputSymbols_.size()),
+					74,
+					85,
+					(iData + 1 == inputSymbols_.size()));
+			}
 		}
 		unsigned __int64 encodedBits = dataWriter.bitCount;
 		dataWriter.flush();
@@ -788,6 +1017,8 @@ private:
 			outPayload.insert(outPayload.end(), tableWriter.bytes.begin(), tableWriter.bytes.end());
 		if (!dataWriter.bytes.empty())
 			outPayload.insert(outPayload.end(), dataWriter.bytes.begin(), dataWriter.bytes.end());
+
+		ReportProgress(progressCtx_, 85, ZJH_PROGRESS_STAGE_PACK_OUTPUT, true);
 
 		return true;
 	}
@@ -1293,7 +1524,7 @@ static bool DecodeLegacyPayloadToFile(const std::vector<unsigned char>& payload,
 		payload.begin() + dataOffset + (size_t)header.payloadLen);
 
 	if (password != NULL && password[0] != '\0')
-		XorCryptPayload(raw, password);
+		XorCryptPayload(raw, password, NULL, ZJH_PROGRESS_STAGE_ENCRYPT_PAYLOAD, 0, 0);
 
 	if (header.originalLen < raw.size())
 		raw.resize((size_t)header.originalLen);
@@ -1303,29 +1534,46 @@ static bool DecodeLegacyPayloadToFile(const std::vector<unsigned char>& payload,
 
 static bool EncodeEnc2Payload(const std::string& path,
 	int len,
-	std::vector<unsigned char>& payload)
+	std::vector<unsigned char>& payload,
+	ProgressContext* progressCtx)
 {
 	// 仅生成 ENC2 负载（不含密码尾与扩展名处理）。
 	if (len <= 0 || len > MAX_LEN)
 		return false;
 
 	EncoderWorker worker;
-	return worker.run(path, len, payload);
+	return worker.run(path, len, payload, progressCtx);
 }
 
-static bool EncodeToFile(const std::string& path, int len, const char* password)
+static bool EncodeToFile(const std::string& path,
+	int len,
+	const char* password,
+	ZJH_ProgressCallback progressCallback,
+	void* userData)
 {
 	// 压缩总入口：
 	// 1) 生成 ENC2 负载；
 	// 2) 若启用密码则混淆负载；
 	// 3) 追加密码尾标记并写成 .zjh 文件。
+	ProgressContext progressCtx(progressCallback, userData);
 	std::vector<unsigned char> payload;
-	if (!EncodeEnc2Payload(path, len, payload))
+	if (!EncodeEnc2Payload(path, len, payload, &progressCtx))
 		return false;
 
 	bool hasPassword = (password != NULL && password[0] != '\0');
 	if (hasPassword)
-		XorCryptPayload(payload, password);
+	{
+		XorCryptPayload(payload,
+			password,
+			&progressCtx,
+			ZJH_PROGRESS_STAGE_ENCRYPT_PAYLOAD,
+			86,
+			92);
+	}
+	else
+	{
+		ReportProgress(&progressCtx, 92, ZJH_PROGRESS_STAGE_ENCRYPT_PAYLOAD, true);
+	}
 
 	std::vector<unsigned char> fileData = payload;
 	if (hasPassword)
@@ -1340,7 +1588,18 @@ static bool EncodeToFile(const std::string& path, int len, const char* password)
 		memcpy(&fileData[oldSize], &hash, 4);
 	}
 
-	return WriteAllBytes(path + ".zjh", fileData);
+	if (!WriteAllBytesWithProgress(path + ".zjh",
+		fileData,
+		&progressCtx,
+		ZJH_PROGRESS_STAGE_WRITE_FILE,
+		92,
+		99))
+	{
+		return false;
+	}
+
+	ReportProgress(&progressCtx, 100, ZJH_PROGRESS_STAGE_DONE, true);
+	return true;
 }
 
 static bool DecodeToFile(const std::string& path,
@@ -1388,7 +1647,7 @@ static bool DecodeToFile(const std::string& path,
 			return false;
 		if (PasswordHash32(password) != storedHash)
 			return false;
-		XorCryptPayload(payload, password);
+		XorCryptPayload(payload, password, NULL, ZJH_PROGRESS_STAGE_ENCRYPT_PAYLOAD, 0, 0);
 	}
 
 	if (payload.size() >= 4 && memcmp(&payload[0], MAGIC_ENC2, 4) == 0)
@@ -1403,22 +1662,32 @@ static bool DecodeToFile(const std::string& path,
 
 } // namespace
 
-bool ZJH_encrypto::encrypto(const std::string& path, int len)
+bool ZJH_encrypto::encrypto(const std::string& path,
+	int len,
+	ZJH_ProgressCallback progressCallback,
+	void* userData)
 {
 	// 无密码压缩接口（默认入口）。
-	return EncodeToFile(path, len, NULL);
+	return EncodeToFile(path, len, NULL, progressCallback, userData);
 }
 
-bool ZJH_encrypto1::encrypto(const std::string& path, int len, const char* password)
+bool ZJH_encrypto1::encrypto(const std::string& path,
+	int len,
+	const char* password,
+	ZJH_ProgressCallback progressCallback,
+	void* userData)
 {
 	// 带密码压缩接口（与界面“设置密码”选项对应）。
-	return EncodeToFile(path, len, password);
+	return EncodeToFile(path, len, password, progressCallback, userData);
 }
 
-bool ZJH_encrypto2::encrypto(const std::string& path, int len)
+bool ZJH_encrypto2::encrypto(const std::string& path,
+	int len,
+	ZJH_ProgressCallback progressCallback,
+	void* userData)
 {
 	// 兼容保留接口：当前行为与 ZJH_encrypto::encrypto 一致。
-	return EncodeToFile(path, len, NULL);
+	return EncodeToFile(path, len, NULL, progressCallback, userData);
 }
 
 bool ZJH_decrypto::decrypto(const std::string& path, const char* password)

@@ -19,6 +19,11 @@ static char THIS_FILE[] = __FILE__;
 static CString ToDialogTextByACP(const wchar_t* textW);
 // 功能：ShowMsgByACP，按当前编码显示提示框文本。
 static void ShowMsgByACP(const wchar_t* textW);
+
+// 运行时创建控件 ID（避免修改 .rc/.h 资源号）。
+// 说明：仅在 CComDlg 内部使用，不与现有资源 ID 冲突即可。
+const int IDC_ZJH_PROGRESS_BAR_RUNTIME = 0x5A01;
+const int IDC_ZJH_PROGRESS_TEXT_RUNTIME = 0x5A02;
 /////////////////////////////////////////////////////////////////////////////
 // CComDlg 对话框
 
@@ -32,6 +37,7 @@ CComDlg::CComDlg(CWnd* pParent /*=NULL*/)
 	m_isLock = FALSE;
 	//}}AFX_DATA_INIT
 	m_password = _T("");
+	m_progressUiCreated = FALSE;
 }
 
 /**
@@ -184,6 +190,173 @@ static void ShowMsgByACP(const wchar_t* textW)
 }
 
 /**
+ * 功能：把毫秒时长格式化为“时分秒”中文文本。
+ * 论文说明：ETA 数值本质上是估计值，UI 只需提供量级可感知展示。
+ * @param unsigned long milliseconds
+ * @return CString
+ */
+CString CComDlg::FormatDurationText(unsigned long milliseconds) const
+{
+	unsigned long totalSeconds = milliseconds / 1000UL;
+	unsigned long seconds = totalSeconds % 60UL;
+	unsigned long minutesAll = totalSeconds / 60UL;
+	unsigned long minutes = minutesAll % 60UL;
+	unsigned long hours = minutesAll / 60UL;
+
+	CString text;
+	if (hours > 0)
+		text.Format(_T("%lu小时%lu分%lu秒"), hours, minutes, seconds);
+	else if (minutes > 0)
+		text.Format(_T("%lu分%lu秒"), minutes, seconds);
+	else
+		text.Format(_T("%lu秒"), seconds);
+	return text;
+}
+
+/**
+ * 功能：确保进度条与进度文本控件已创建。
+ * 设计理由：
+ * 1) 采用运行时创建，避免修改 .rc 资源导致编码/布局回归风险；
+ * 2) 仅在 ZJH 压缩场景启用，不影响 HUF 路径与既有交互。
+ */
+void CComDlg::EnsureProgressUi()
+{
+	if (m_progressUiCreated)
+		return;
+
+	CRect rcTextDU(35, 174, 146, 182);  // 以对话框单位描述，后续转像素
+	CRect rcBarDU(35, 186, 146, 196);
+	MapDialogRect(&rcTextDU);
+	MapDialogRect(&rcBarDU);
+
+	BOOL okText = m_zjhProgressText.Create(_T(""), WS_CHILD | WS_VISIBLE,
+		rcTextDU, this, IDC_ZJH_PROGRESS_TEXT_RUNTIME);
+	BOOL okBar = m_zjhProgress.Create(WS_CHILD | WS_VISIBLE | PBS_SMOOTH,
+		rcBarDU, this, IDC_ZJH_PROGRESS_BAR_RUNTIME);
+	if (!okText || !okBar)
+	{
+		m_progressUiCreated = FALSE;
+		return;
+	}
+
+	m_zjhProgress.SetRange(0, 100);
+	m_zjhProgress.SetPos(0);
+	m_progressUiCreated = TRUE;
+}
+
+/**
+ * 功能：重置进度显示为初始状态。
+ * @return void
+ */
+void CComDlg::ResetProgressUi()
+{
+	EnsureProgressUi();
+	if (!m_progressUiCreated)
+		return;
+
+	m_zjhProgress.SetPos(0);
+	m_zjhProgressText.SetWindowText(ToDialogTextByACP(L"ZJH压缩进度：等待开始"));
+}
+
+/**
+ * 功能：压缩开始后临时禁用关键输入控件，结束后恢复。
+ * @param BOOL enabled
+ * @return void
+ */
+void CComDlg::SetCompressionUiEnabled(BOOL enabled)
+{
+	const int controls[] = {
+		IDC_OPEN, IDC_EDIT1, IDC_RADIO1, IDC_RADIO2,
+		IDC_COMBO1, IDC_COMBO2, IDC_SETPASS,
+		IDC_CHECK1, IDC_CHECK2, IDC_CHECK3,
+		IDC_OK, IDC_CANCEL
+	};
+
+	for (int i = 0; i < (int)(sizeof(controls) / sizeof(controls[0])); ++i)
+	{
+		CWnd* pWnd = GetDlgItem(controls[i]);
+		if (pWnd != NULL)
+			pWnd->EnableWindow(enabled);
+	}
+}
+
+/**
+ * 功能：根据压缩回调实时刷新阶段、百分比、已耗时与 ETA。
+ * 论文说明：为保证单线程压缩过程界面可刷新，此处主动泵消息队列。
+ * @param int percent
+ * @param int stage
+ * @param unsigned long elapsedMs
+ * @param unsigned long etaMs
+ */
+void CComDlg::UpdateProgressUi(int percent, int stage, unsigned long elapsedMs, unsigned long etaMs)
+{
+	EnsureProgressUi();
+	if (!m_progressUiCreated)
+		return;
+
+	if (percent < 0) percent = 0;
+	if (percent > 100) percent = 100;
+
+	const wchar_t* stageText = L"准备中";
+	switch (stage)
+	{
+	case ZJH_PROGRESS_STAGE_READ_INPUT: stageText = L"读取源文件"; break;
+	case ZJH_PROGRESS_STAGE_BUILD_TREE: stageText = L"构建编码树"; break;
+	case ZJH_PROGRESS_STAGE_OPTIMIZE_CODE: stageText = L"调整可重前缀"; break;
+	case ZJH_PROGRESS_STAGE_PACK_OUTPUT: stageText = L"生成压缩数据"; break;
+	case ZJH_PROGRESS_STAGE_ENCRYPT_PAYLOAD: stageText = L"加密压缩负载"; break;
+	case ZJH_PROGRESS_STAGE_WRITE_FILE: stageText = L"写入压缩文件"; break;
+	case ZJH_PROGRESS_STAGE_DONE: stageText = L"压缩完成"; break;
+	default: stageText = L"准备中"; break;
+	}
+
+	m_zjhProgress.SetPos(percent);
+
+	CString text;
+	if (percent >= 100)
+	{
+		text.Format(_T("%s：100%%，总耗时 %s"),
+			(LPCTSTR)ToDialogTextByACP(stageText),
+			(LPCTSTR)FormatDurationText(elapsedMs));
+	}
+	else
+	{
+		text.Format(_T("%s：%d%%，已用 %s，预计剩余 %s"),
+			(LPCTSTR)ToDialogTextByACP(stageText),
+			percent,
+			(LPCTSTR)FormatDurationText(elapsedMs),
+			(LPCTSTR)FormatDurationText(etaMs));
+	}
+	m_zjhProgressText.SetWindowText(text);
+
+	m_zjhProgress.UpdateWindow();
+	m_zjhProgressText.UpdateWindow();
+	UpdateWindow();
+
+	MSG msg;
+	while (::PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
+	{
+		::TranslateMessage(&msg);
+		::DispatchMessage(&msg);
+	}
+}
+
+/**
+ * 功能：zjh_codec 压缩进度回调静态转发函数。
+ * @param int percent
+ * @param int stage
+ * @param unsigned long elapsedMs
+ * @param unsigned long etaMs
+ * @param void* userData
+ */
+void CComDlg::OnZjhProgress(int percent, int stage, unsigned long elapsedMs, unsigned long etaMs, void* userData)
+{
+	CComDlg* pThis = (CComDlg*)userData;
+	if (pThis != NULL)
+		pThis->UpdateProgressUi(percent, stage, elapsedMs, etaMs);
+}
+
+/**
  * 根据选中文件和压缩参数执行压缩，并按选项执行删除或 CRC 校验。
  * 功能：执行压缩流程。
  * @return void
@@ -194,6 +367,7 @@ void CComDlg::OnOk()
 {
 	// 代码段功能：同步界面状态、校验输入、执行压缩与可选校验。
 	UpdateData(TRUE);
+	ResetProgressUi();
 
 	char loadPath[500] = {0};
 	if (!GetInputPath(loadPath))
@@ -268,8 +442,14 @@ void CComDlg::OnOk()
 			zjhLen = 10;
 
 		ZJH_encrypto1 zjh;
-		if (!zjh.encrypto(std::string(loadPath), zjhLen, pEncryptPass))
+		SetCompressionUiEnabled(FALSE);
+		if (!zjh.encrypto(std::string(loadPath),
+			zjhLen,
+			pEncryptPass,
+			CComDlg::OnZjhProgress,
+			this))
 		{
+			SetCompressionUiEnabled(TRUE);
 			ShowMsgByACP(L"ZJH压缩失败，请检查源文件与压缩参数！");
 			return;
 		}
@@ -290,11 +470,14 @@ void CComDlg::OnOk()
 			ZJH_decrypto verify;
 			if (!verify.decrypto_to(std::string(codePath), std::string(verifyOut), pEncryptPass))
 			{
+				SetCompressionUiEnabled(TRUE);
 				ShowMsgByACP(L"测试压缩文件失败，ZJH压缩包无法正确解压！");
 				return;
 			}
 			_unlink(verifyOut);
 		}
+
+		SetCompressionUiEnabled(TRUE);
 	}
 
 	// 代码段功能：若用户勾选删除源文件，执行删除并提示结果。
@@ -367,6 +550,9 @@ BOOL CComDlg::OnInitDialog()
 			pUpdate->SetCurSel(0);
 		pUpdate->SetDroppedWidth(220);
 	}
+
+	EnsureProgressUi();
+	ResetProgressUi();
 
 	return TRUE;
 }
