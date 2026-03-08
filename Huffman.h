@@ -12,6 +12,31 @@
 #include <string>
 using namespace std;
 
+// Huffman 压缩进度阶段：
+// 采用与 ZJH 相同的“总进度 + 阶段”表达，用于统一界面显示逻辑。
+enum HUF_PROGRESS_STAGE
+{
+	HUF_PROGRESS_STAGE_PREPARE = 200,
+	HUF_PROGRESS_STAGE_READ_INPUT = 201,
+	HUF_PROGRESS_STAGE_COUNT_WEIGHT = 202,
+	HUF_PROGRESS_STAGE_BUILD_TREE = 203,
+	HUF_PROGRESS_STAGE_ENCODE_DATA = 204,
+	HUF_PROGRESS_STAGE_WRITE_FILE = 205,
+	HUF_PROGRESS_STAGE_DONE = 206
+};
+
+// Huffman 压缩进度回调：
+// percent   : 总进度（0~100）
+// stage     : 当前阶段，取值见 HUF_PROGRESS_STAGE
+// elapsedMs : 已耗时（毫秒）
+// etaMs     : 预计剩余（毫秒）
+// userData  : 上层透传上下文（通常是对话框 this）
+typedef void (*HUF_ProgressCallback)(int percent,
+	int stage,
+	unsigned long elapsedMs,
+	unsigned long etaMs,
+	void* userData);
+
 // Huffman 树节点
 typedef struct
 {
@@ -36,6 +61,11 @@ private:
 	void ResetData(); // 清空内部缓存，释放动态内存并恢复初始状态
 	BOOL BuildPayload(string& payload); // 把当前 Huffman 树和编码结果打包成可写入文件的负载
 	BOOL ParsePayload(const unsigned char* payload, int payloadSize); // 从负载字节流还原 Huffman 树和编码数据
+	void ReportProgress(int percent, int stage, BOOL force = FALSE); // 上报总进度与阶段
+	void ReportStageProgress(int stage, unsigned __int64 done, unsigned __int64 total, int startPercent, int endPercent, BOOL force = FALSE); // 按阶段工作量映射进度
+	void BeginProgressSession(); // 启动一次压缩进度会话
+	unsigned long CalcElapsedMs() const; // 计算已耗时毫秒
+	unsigned long CalcEtaMs(int percent, unsigned long elapsedMs) const; // 线性外推估计剩余时间
 
 	HuffTree huffTree;  // Huffman 树
 	CharMap chars;      // 字符映射表
@@ -45,6 +75,11 @@ private:
 
 	BOOL m_hasPassword;             // 当前读取包是否带密码校验信息
 	unsigned long m_storedCrc32;    // 压缩包中记录的原文 CRC32
+	HUF_ProgressCallback m_progressCallback; // 压缩进度回调
+	void* m_progressUserData;       // 回调上下文
+	DWORD m_progressStartTick;      // 本次压缩起始时刻
+	int m_lastProgressPercent;      // 去抖：避免重复上报相同百分比
+	int m_lastProgressStage;        // 去抖：避免重复上报相同阶段
 
 public:
 	void InputCharsWeight(); // 交互输入字符及权重（调试辅助）
@@ -63,6 +98,7 @@ public:
 	int FileSize(char *path); // 获取指定文件字节长度
 
 	unsigned long GetTextCRC32() const; // 计算当前 text 的 CRC32
+	void SetProgressCallback(HUF_ProgressCallback callback, void* userData); // 设置压缩进度回调（可传 NULL 关闭）
 
 	BOOL GetPackageInfo(char *filename, BOOL* hasPassword, unsigned long* storedCrc32, char md5HexOut[33]); // 预读取压缩包尾部信息
 	BOOL HasPassword() const { return m_hasPassword; }

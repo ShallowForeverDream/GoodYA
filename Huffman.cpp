@@ -358,12 +358,96 @@ Huffman::Huffman()
 	n = 0;
 	m_hasPassword = FALSE;
 	m_storedCrc32 = 0;
+	m_progressCallback = NULL;
+	m_progressUserData = NULL;
+	m_progressStartTick = 0;
+	m_lastProgressPercent = -1;
+	m_lastProgressStage = -1;
 }
 
 // 功能：析构 Huffman 对象并释放动态资源。
 Huffman::~Huffman()
 {
 	ResetData();
+}
+
+// 功能：设置 Huffman 压缩进度回调函数与上下文。
+void Huffman::SetProgressCallback(HUF_ProgressCallback callback, void* userData)
+{
+	// 仅更新回调配置，不立即触发上报；真正开始由 BeginProgressSession 控制。
+	m_progressCallback = callback;
+	m_progressUserData = userData;
+}
+
+// 功能：启动一次新的压缩进度会话。
+void Huffman::BeginProgressSession()
+{
+	// 重置时间基线与去抖状态，保证每次压缩都从 0% 开始。
+	m_progressStartTick = ::GetTickCount();
+	m_lastProgressPercent = -1;
+	m_lastProgressStage = -1;
+	ReportProgress(0, HUF_PROGRESS_STAGE_PREPARE, TRUE);
+}
+
+// 功能：计算自会话开始以来的已耗时毫秒。
+unsigned long Huffman::CalcElapsedMs() const
+{
+	if (m_progressStartTick == 0)
+		return 0;
+	DWORD now = ::GetTickCount();
+	return (unsigned long)(now - m_progressStartTick);
+}
+
+// 功能：按线性外推估算剩余时间。
+unsigned long Huffman::CalcEtaMs(int percent, unsigned long elapsedMs) const
+{
+	if (percent <= 0 || percent >= 100)
+		return 0;
+	unsigned __int64 remain = (unsigned __int64)elapsedMs * (unsigned __int64)(100 - percent);
+	return (unsigned long)(remain / (unsigned __int64)percent);
+}
+
+// 功能：上报一个总进度点（含阶段、耗时和 ETA）。
+void Huffman::ReportProgress(int percent, int stage, BOOL force)
+{
+	if (m_progressCallback == NULL)
+		return;
+
+	if (percent < 0) percent = 0;
+	if (percent > 100) percent = 100;
+	if (!force && m_lastProgressPercent == percent && m_lastProgressStage == stage)
+		return;
+
+	unsigned long elapsedMs = CalcElapsedMs();
+	unsigned long etaMs = CalcEtaMs(percent, elapsedMs);
+	m_progressCallback(percent, stage, elapsedMs, etaMs, m_progressUserData);
+	m_lastProgressPercent = percent;
+	m_lastProgressStage = stage;
+}
+
+// 功能：把阶段内完成度映射到总进度区间并上报。
+void Huffman::ReportStageProgress(int stage,
+	unsigned __int64 done,
+	unsigned __int64 total,
+	int startPercent,
+	int endPercent,
+	BOOL force)
+{
+	if (m_progressCallback == NULL)
+		return;
+
+	if (total == 0)
+	{
+		ReportProgress(endPercent, stage, force);
+		return;
+	}
+
+	if (done > total)
+		done = total;
+
+	unsigned __int64 width = (unsigned __int64)(endPercent - startPercent);
+	int percent = startPercent + (int)((done * width) / total);
+	ReportProgress(percent, stage, force);
 }
 
 // 功能：重置内部数据结构，避免重复压缩/解压时残留状态。
@@ -404,7 +488,12 @@ void Huffman::Encode()
 	// 按字符逐个查表并拼接 Huffman 编码串。
 	code = "";
 	if (n <= 0 || chars == NULL)
+	{
+		ReportProgress(85, HUF_PROGRESS_STAGE_ENCODE_DATA, TRUE);
 		return;
+	}
+
+	ReportProgress(69, HUF_PROGRESS_STAGE_ENCODE_DATA, TRUE);
 
 	string::size_type i;
 	for (i = 0; i != text.size(); ++i)
@@ -419,7 +508,18 @@ void Huffman::Encode()
 				break;
 			}
 		}
+
+		if (((i & 0x0FFF) == 0) || (i + 1 == text.size()))
+		{
+			ReportStageProgress(HUF_PROGRESS_STAGE_ENCODE_DATA,
+				(unsigned __int64)(i + 1),
+				(unsigned __int64)(text.empty() ? 1 : text.size()),
+				69,
+				85,
+				(i + 1 == text.size()) ? TRUE : FALSE);
+		}
 	}
+	ReportProgress(85, HUF_PROGRESS_STAGE_ENCODE_DATA, TRUE);
 }
 
 // 功能：调试输出字符权重表。
@@ -545,7 +645,12 @@ void Huffman::MakeCharMap()
 {
 	// 完成建树后逆向回溯每个叶子节点得到最终编码。
 	if (n <= 0 || chars == NULL)
+	{
+		ReportProgress(68, HUF_PROGRESS_STAGE_BUILD_TREE, TRUE);
 		return;
+	}
+
+	ReportProgress(53, HUF_PROGRESS_STAGE_BUILD_TREE, TRUE);
 
 	if (huffTree != NULL)
 	{
@@ -560,6 +665,7 @@ void Huffman::MakeCharMap()
 		chars[1].code = new char[2];
 		chars[1].code[0] = '0';
 		chars[1].code[1] = '\0';
+		ReportProgress(68, HUF_PROGRESS_STAGE_BUILD_TREE, TRUE);
 		return;
 	}
 
@@ -590,6 +696,13 @@ void Huffman::MakeCharMap()
 		huffTree[i].lchild = s1;
 		huffTree[i].rchild = s2;
 		huffTree[i].weight = huffTree[s1].weight + huffTree[s2].weight;
+
+		ReportStageProgress(HUF_PROGRESS_STAGE_BUILD_TREE,
+			(unsigned __int64)(i - n),
+			(unsigned __int64)(m - n),
+			53,
+			62,
+			(i == m) ? TRUE : FALSE);
 	}
 
 	char *cd = new char[n + 1];
@@ -613,14 +726,26 @@ void Huffman::MakeCharMap()
 		}
 		chars[i].code = new char[n - start + 1];
 		strcpy(chars[i].code, &cd[start]);
+
+		if (((i & 0x3F) == 0) || i == n)
+		{
+			ReportStageProgress(HUF_PROGRESS_STAGE_BUILD_TREE,
+				(unsigned __int64)i,
+				(unsigned __int64)(n > 0 ? n : 1),
+				62,
+				68,
+				(i == n) ? TRUE : FALSE);
+		}
 	}
 	delete[] cd;
+	ReportProgress(68, HUF_PROGRESS_STAGE_BUILD_TREE, TRUE);
 }
 
 // 功能：读取源文本文件到 text 缓冲。
 void Huffman::ReadTextFromFile(char *filename)
 {
 	// 按字节读入文件内容，为后续统计和压缩做准备。
+	BeginProgressSession();
 	ifstream infile(filename, ios::binary);
 	if (!infile)
 	{
@@ -629,13 +754,34 @@ void Huffman::ReadTextFromFile(char *filename)
 		return;
 	}
 
+	infile.seekg(0, ios::end);
+	long fileSize = (long)infile.tellg();
+	if (fileSize < 0)
+		fileSize = 0;
+	infile.seekg(0, ios::beg);
+
 	text = "";
+	if (fileSize > 0)
+		text.reserve((size_t)fileSize);
 	char c;
+	unsigned __int64 readBytes = 0;
 	while (infile.get(c))
 	{
 		text += c;
+		++readBytes;
+		if (((readBytes & 0x0FFF) == 0) || readBytes == (unsigned __int64)fileSize)
+		{
+			ReportStageProgress(HUF_PROGRESS_STAGE_READ_INPUT,
+				readBytes,
+				(fileSize > 0) ? (unsigned __int64)fileSize : 1,
+				1,
+				30,
+				(readBytes == (unsigned __int64)fileSize) ? TRUE : FALSE);
+		}
 	}
 	infile.close();
+	if (fileSize == 0)
+		ReportProgress(30, HUF_PROGRESS_STAGE_READ_INPUT, TRUE);
 }
 
 // 功能：将 Huffman 结构与编码数据序列化为压缩包负载。
@@ -645,6 +791,8 @@ BOOL Huffman::BuildPayload(string& payload)
 	payload = "";
 	if (n <= 0 || chars == NULL)
 		return FALSE;
+
+	ReportProgress(86, HUF_PROGRESS_STAGE_WRITE_FILE, TRUE);
 
 	int i, j;
 	AppendBytes(payload, &n, sizeof(int));
@@ -656,6 +804,16 @@ BOOL Huffman::BuildPayload(string& payload)
 		AppendBytes(payload, &codeLen, sizeof(int));
 		if (codeLen > 0)
 			AppendBytes(payload, chars[i].code, codeLen);
+
+		if (((i & 0x3F) == 0) || i == n)
+		{
+			ReportStageProgress(HUF_PROGRESS_STAGE_WRITE_FILE,
+				(unsigned __int64)i,
+				(unsigned __int64)(n > 0 ? n : 1),
+				86,
+				89,
+				(i == n) ? TRUE : FALSE);
+		}
 	}
 
 	int length = (int)code.length();
@@ -674,8 +832,19 @@ BOOL Huffman::BuildPayload(string& payload)
 			++num;
 		}
 		AppendBytes(payload, &outByte, sizeof(unsigned char));
+
+		if (((i & 0x0FFF) == 0) || (i + 1 == times))
+		{
+			ReportStageProgress(HUF_PROGRESS_STAGE_WRITE_FILE,
+				(unsigned __int64)(i + 1),
+				(unsigned __int64)(times > 0 ? times : 1),
+				89,
+				92,
+				(i + 1 == times) ? TRUE : FALSE);
+		}
 	}
 
+	ReportProgress(92, HUF_PROGRESS_STAGE_WRITE_FILE, TRUE);
 	return TRUE;
 }
 
@@ -694,7 +863,32 @@ BOOL Huffman::SaveCodeToFile(char *filename, const char* password, unsigned long
 	string outPayload = payload;
 	if (hasPassword)
 	{
-		XorCryptPayload((unsigned char*)&outPayload[0], (int)outPayload.size(), password);
+		// 论文说明：加密阶段采用与解密完全对称的异或流，边处理边上报进度。
+		int passLen = (int)strlen(password);
+		unsigned long seed = 0x9E3779B9UL;
+		int i;
+		for (i = 0; i < (int)outPayload.size(); ++i)
+		{
+			seed = seed * 1664525UL + 1013904223UL + (unsigned char)password[i % passLen];
+			unsigned char key = (unsigned char)(((seed >> 24) & 0xFF) ^
+				(unsigned char)password[(i * 7 + 3) % passLen] ^
+				(i & 0xFF));
+			outPayload[(size_t)i] = (char)(((unsigned char)outPayload[(size_t)i]) ^ key);
+
+			if (((i & 0x3FFF) == 0) || (i + 1 == (int)outPayload.size()))
+			{
+				ReportStageProgress(HUF_PROGRESS_STAGE_WRITE_FILE,
+					(unsigned __int64)(i + 1),
+					(unsigned __int64)(outPayload.empty() ? 1 : outPayload.size()),
+					92,
+					94,
+					(i + 1 == (int)outPayload.size()) ? TRUE : FALSE);
+			}
+		}
+	}
+	else
+	{
+		ReportProgress(94, HUF_PROGRESS_STAGE_WRITE_FILE, TRUE);
 	}
 
 	char md5Hex[33] = {0};
@@ -707,21 +901,69 @@ BOOL Huffman::SaveCodeToFile(char *filename, const char* password, unsigned long
 		return FALSE;
 	}
 
+	unsigned __int64 totalWrite = (unsigned __int64)outPayload.size() + (unsigned __int64)kTailSize;
+	unsigned __int64 written = 0;
+
 	if (!outPayload.empty())
-		fwrite(outPayload.data(), sizeof(char), outPayload.size(), f);
+	{
+		const unsigned char* p = (const unsigned char*)outPayload.data();
+		int remain = (int)outPayload.size();
+		const int kChunk = 64 * 1024;
+		while (remain > 0)
+		{
+			int nWrite = (remain > kChunk) ? kChunk : remain;
+			if (fwrite(p, 1, nWrite, f) != (size_t)nWrite)
+			{
+				fclose(f);
+				return FALSE;
+			}
+			p += nWrite;
+			remain -= nWrite;
+			written += (unsigned __int64)nWrite;
+			ReportStageProgress(HUF_PROGRESS_STAGE_WRITE_FILE, written, totalWrite, 94, 99, FALSE);
+		}
+	}
 
 	// 尾部结构：magic(6) + flag(1) + crc32(4) + md5hex(32)
-	fwrite(kTailMagic, sizeof(char), kTailMagicLen, f);
+	if (fwrite(kTailMagic, sizeof(char), kTailMagicLen, f) != (size_t)kTailMagicLen)
+	{
+		fclose(f);
+		return FALSE;
+	}
+	written += (unsigned __int64)kTailMagicLen;
+	ReportStageProgress(HUF_PROGRESS_STAGE_WRITE_FILE, written, totalWrite, 94, 99, FALSE);
+
 	{
 		unsigned char flag = hasPassword ? 1 : 0;
-		fwrite(&flag, sizeof(unsigned char), 1, f);
+		if (fwrite(&flag, sizeof(unsigned char), 1, f) != 1)
+		{
+			fclose(f);
+			return FALSE;
+		}
 	}
-	fwrite(&sourceCrc32, sizeof(unsigned long), 1, f);
-	fwrite(md5Hex, sizeof(char), kMd5HexLen, f);
+	written += 1;
+	ReportStageProgress(HUF_PROGRESS_STAGE_WRITE_FILE, written, totalWrite, 94, 99, FALSE);
+
+	if (fwrite(&sourceCrc32, sizeof(unsigned long), 1, f) != 1)
+	{
+		fclose(f);
+		return FALSE;
+	}
+	written += sizeof(unsigned long);
+	ReportStageProgress(HUF_PROGRESS_STAGE_WRITE_FILE, written, totalWrite, 94, 99, FALSE);
+
+	if (fwrite(md5Hex, sizeof(char), kMd5HexLen, f) != (size_t)kMd5HexLen)
+	{
+		fclose(f);
+		return FALSE;
+	}
+	written += (unsigned __int64)kMd5HexLen;
+	ReportStageProgress(HUF_PROGRESS_STAGE_WRITE_FILE, written, totalWrite, 94, 99, TRUE);
 
 	fclose(f);
 	m_hasPassword = hasPassword;
 	m_storedCrc32 = sourceCrc32;
+	ReportProgress(100, HUF_PROGRESS_STAGE_DONE, TRUE);
 	return TRUE;
 }
 
@@ -993,7 +1235,10 @@ void Huffman::CountCharsWeight()
 {
 	// 遍历 text 累加计数，再归一化为每个字符权重。
 	if (text.empty())
+	{
+		ReportProgress(52, HUF_PROGRESS_STAGE_COUNT_WEIGHT, TRUE);
 		return;
+	}
 
 	if (chars != NULL)
 	{
@@ -1010,6 +1255,7 @@ void Huffman::CountCharsWeight()
 		chars = NULL;
 	}
 	n = 0;
+	ReportProgress(32, HUF_PROGRESS_STAGE_COUNT_WEIGHT, TRUE);
 
 	int i = 0;
 	chars = new CharMapNode[2];
@@ -1022,6 +1268,7 @@ void Huffman::CountCharsWeight()
 	++n;
 
 	int total = 1;
+	int textSize = (int)text.size();
 	for (i = 1; i != (int)text.size(); ++i)
 	{
 		int j;
@@ -1047,6 +1294,16 @@ void Huffman::CountCharsWeight()
 			chars[n].weight = 1;
 			chars[n].code = NULL;
 		}
+
+		if (((i & 0x0FFF) == 0) || i + 1 == textSize)
+		{
+			ReportStageProgress(HUF_PROGRESS_STAGE_COUNT_WEIGHT,
+				(unsigned __int64)(i + 1),
+				(unsigned __int64)(textSize > 0 ? textSize : 1),
+				32,
+				52,
+				(i + 1 == textSize) ? TRUE : FALSE);
+		}
 	}
 
 	int p;
@@ -1054,6 +1311,7 @@ void Huffman::CountCharsWeight()
 	{
 		chars[p].weight = chars[p].weight / total;
 	}
+	ReportProgress(52, HUF_PROGRESS_STAGE_COUNT_WEIGHT, TRUE);
 }
 
 // 功能：计算当前 text 内容的 CRC32。
