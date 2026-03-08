@@ -6,6 +6,9 @@
 #include "DecDlg.h"
 #include "Huffman.h"
 #include "PassDlg.h"
+#include "zjh_codec.h"
+#include <string>
+#include <string.h>
 #include <shellapi.h>
 
 #ifdef _DEBUG
@@ -35,6 +38,31 @@ static void ShowMsgByACP(const wchar_t* textW)
 {
 	// 代码段功能：通过统一转换后调用 AfxMessageBox。
 	AfxMessageBox(ToDialogTextByACP(textW));
+}
+
+// 功能：判断 ANSI 路径是否以指定后缀结尾（不区分大小写）。
+static BOOL EndsWithIgnoreCase(const char* text, const char* suffix)
+{
+	if (text == NULL || suffix == NULL)
+		return FALSE;
+
+	int textLen = (int)strlen(text);
+	int suffixLen = (int)strlen(suffix);
+	if (textLen < suffixLen)
+		return FALSE;
+
+	const char* p = text + (textLen - suffixLen);
+	for (int i = 0; i < suffixLen; ++i)
+	{
+		char a = p[i];
+		char b = suffix[i];
+		if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+		if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+		if (a != b)
+			return FALSE;
+	}
+
+	return TRUE;
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -107,7 +135,7 @@ BOOL CDecDlg::GetInputPath(char outPath[500])
 
 	if (outPath[0] == '\0')
 	{
-		ShowMsgByACP(L"请选择 .huf 文件！");
+		ShowMsgByACP(L"请选择 .huf 或 .zjh 文件！");
 		return FALSE;
 	}
 	return TRUE;
@@ -143,14 +171,36 @@ void CDecDlg::OnDecDlgOk()
 	if (!GetInputPath(savePath))
 		return;
 
+	BOOL isHuf = EndsWithIgnoreCase(savePath, ".huf");
+	BOOL isZjh = EndsWithIgnoreCase(savePath, ".zjh");
+	if (!isHuf && !isZjh)
+	{
+		ShowMsgByACP(L"仅支持解压 .huf 或 .zjh 文件！");
+		return;
+	}
+
 	Huffman huffman;
 	BOOL hasPassword = FALSE;
 	unsigned long storedCrc = 0;
 	char md5Hex[33] = {0};
-	if (!huffman.GetPackageInfo(savePath, &hasPassword, &storedCrc, md5Hex))
+
+	if (isHuf)
 	{
-		ShowMsgByACP(L"读取压缩文件信息失败！");
-		return;
+		if (!huffman.GetPackageInfo(savePath, &hasPassword, &storedCrc, md5Hex))
+		{
+			ShowMsgByACP(L"读取压缩文件信息失败！");
+			return;
+		}
+	}
+	else
+	{
+		bool hasPasswordZjh = false;
+		if (!ZJH_GetPackageInfo(std::string(savePath), &hasPasswordZjh))
+		{
+			ShowMsgByACP(L"读取 ZJH 文件信息失败！");
+			return;
+		}
+		hasPassword = hasPasswordZjh ? TRUE : FALSE;
 	}
 
 	CString password;
@@ -173,48 +223,64 @@ void CDecDlg::OnDecDlgOk()
 		pPass = passA;
 	}
 
-	if (!huffman.ReadCodeFromFile(savePath, pPass))
+	if (isHuf)
 	{
-		if (hasPassword)
-			ShowMsgByACP(L"密码错误，或压缩文件已损坏！");
-		else
-			ShowMsgByACP(L"读取压缩文件失败，文件不存在或损坏！");
-		return;
-	}
-
-	huffman.Decode();
-
-	// 文件记录原文 CRC32 时，做解压结果一致性校验。
-	if (storedCrc != 0)
-	{
-		unsigned long decodedCrc = huffman.GetTextCRC32();
-		if (decodedCrc != storedCrc)
+		if (!huffman.ReadCodeFromFile(savePath, pPass))
 		{
-			ShowMsgByACP(L"CRC 校验失败，解压结果与原文不一致！");
+			if (hasPassword)
+				ShowMsgByACP(L"密码错误，或压缩文件已损坏！");
+			else
+				ShowMsgByACP(L"读取压缩文件失败，文件不存在或损坏！");
+			return;
+		}
+
+		huffman.Decode();
+
+		// 文件记录原文 CRC32 时，做解压结果一致性校验。
+		if (storedCrc != 0)
+		{
+			unsigned long decodedCrc = huffman.GetTextCRC32();
+			if (decodedCrc != storedCrc)
+			{
+				ShowMsgByACP(L"CRC 校验失败，解压结果与原文不一致！");
+				return;
+			}
+		}
+
+		char outPath[500] = {0};
+		strncpy(outPath, savePath, sizeof(outPath) - 1);
+		outPath[sizeof(outPath) - 1] = '\0';
+		char* pExt = strrchr(outPath, '.');
+		if (pExt != NULL)
+			strcpy(pExt + 1, "txt");
+		else
+			strcat(outPath, ".txt");
+
+		huffman.SaveTextToFile(outPath);
+	}
+	else
+	{
+		ZJH_decrypto decrypto;
+		if (!decrypto.decrypto(std::string(savePath), pPass))
+		{
+			if (hasPassword)
+				ShowMsgByACP(L"ZJH 解压失败：密码错误，或压缩包已损坏！");
+			else
+				ShowMsgByACP(L"ZJH 解压失败：文件格式不正确或内容损坏！");
 			return;
 		}
 	}
 
-	char outPath[500] = {0};
-	strncpy(outPath, savePath, sizeof(outPath) - 1);
-	outPath[sizeof(outPath) - 1] = '\0';
-	char* pExt = strrchr(outPath, '.');
-	if (pExt != NULL)
-		strcpy(pExt + 1, "txt");
-	else
-		strcat(outPath, ".txt");
-
-	huffman.SaveTextToFile(outPath);
 	ShowMsgByACP(L"解压完成。");
 	EndDialog(IDOK);
 }
 
-// 功能：浏览并选择待解压 .huf 文件。
+// 功能：浏览并选择待解压 .huf/.zjh 文件。
 void CDecDlg::OnBrowse()
 {
 	// 代码段功能：打开文件对话框并把选中的路径回填到输入框。
 	CString m_strFileName;
-	CString szFilter = ToDialogTextByACP(L"压缩文件(*.huf)|*.huf|所有文件(*.*)|*.*||"); // 原文：压缩文件(*.huf)|*.huf|所有文件(*.*)|*.*||
+	CString szFilter = ToDialogTextByACP(L"压缩文件(*.huf;*.zjh)|*.huf;*.zjh|HUF文件(*.huf)|*.huf|ZJH文件(*.zjh)|*.zjh|所有文件(*.*)|*.*||"); // 原文：压缩文件(*.huf;*.zjh)|*.huf;*.zjh|所有文件(*.*)|*.*||
 	CFileDialog fileDlg(TRUE, NULL, NULL, OFN_HIDEREADONLY | OFN_OVERWRITEPROMPT, (LPCTSTR)szFilter, this);
 
 	if (fileDlg.DoModal() == IDOK)
@@ -464,3 +530,4 @@ void CDecDlg::OnTvnSelchangedTree1(NMHDR* pNMHDR, LRESULT* pResult)
 
 	*pResult = 0;
 }
+
