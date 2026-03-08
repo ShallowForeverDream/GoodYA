@@ -631,8 +631,9 @@ void CComDlg::OnOpen()
 {
 	// 代码段功能：打开文件对话框并把选中的路径回填到输入框。
 	CString m_strFileName;
-	CString szFilter = ToDialogTextByACP(L"文本文件(*.txt)|*.txt|所有文件(*.*)|*.*||");
+	CString szFilter = ToDialogTextByACP(L"所有文件(*.*)|*.*|文本文件(*.txt)|*.txt||");
 	CFileDialog fileDlg(TRUE, NULL, NULL, OFN_HIDEREADONLY | OFN_OVERWRITEPROMPT, (LPCTSTR)szFilter, this);
+	fileDlg.m_ofn.nFilterIndex = 1;
 
 	if (fileDlg.DoModal() == IDOK)
 	{
