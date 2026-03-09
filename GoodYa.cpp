@@ -49,8 +49,8 @@ CGoodYaApp theApp;
  * 功能：初始化 MFC 应用、文档模板与主窗口。
  * 设置控制容器、注册文档模板并显示主窗口。
  * @return BOOL
- * @author zxl
- * @date 2024-06-01
+ * @author zjh
+ * @date 2026-03-01
  */
 BOOL CGoodYaApp::InitInstance()
 {
@@ -123,8 +123,8 @@ CAboutDlg::CAboutDlg() : CDialog(CAboutDlg::IDD)
  * 功能：执行关于对话框控件的数据交换。
  * @param CDataExchange* pDX
  * @return void
- * @author zxl
- * @date 2024-06-01
+ * @author zjh
+ * @date 2026-03-01
  */
 void CAboutDlg::DoDataExchange(CDataExchange* pDX)
 {
@@ -142,8 +142,8 @@ END_MESSAGE_MAP()
  * 功能：显示“关于”对话框。
  * 弹出关于对话框并阻塞直到关闭。
  * @return void
- * @author zxl
- * @date 2024-06-01
+ * @author zjh
+ * @date 2026-03-01
  */
 void CGoodYaApp::OnAppAbout()
 {

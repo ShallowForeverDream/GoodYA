@@ -45,8 +45,8 @@ CComDlg::CComDlg(CWnd* pParent /*=NULL*/)
  * 绑定对话框控件与类成员变量，执行 DDX/DDV 数据交换。
  * @param CDataExchange* pDX
  * @return void
- * @author zxl
- * @date 2024-06-01
+ * @author zjh
+ * @date 2026-03-01
  */
 void CComDlg::DoDataExchange(CDataExchange* pDX)
 {
@@ -77,8 +77,8 @@ END_MESSAGE_MAP()
  * 功能：处理“取消”按钮，关闭压缩设置对话框。
  * 返回 IDCANCEL 给调用方并关闭对话框。
  * @return void
- * @author zxl
- * @date 2024-06-01
+ * @author zjh
+ * @date 2026-03-01
  */
 void CComDlg::OnCancel()
 {
@@ -91,8 +91,8 @@ void CComDlg::OnCancel()
  * 功能：获取待压缩文件路径并做编码转换与校验。
  * @param char outPath[500]
  * @return BOOL 转换成功返回 TRUE，失败返回 FALSE
- * @author zxl
- * @date 2024-06-01
+ * @author zjh
+ * @date 2026-03-01
  */
 BOOL CComDlg::GetInputPath(char outPath[500])
 {
@@ -127,8 +127,8 @@ BOOL CComDlg::GetInputPath(char outPath[500])
  * 获取并转换密码为 ANSI。
  * @param char outPass[129]
  * @return BOOL 转换成功返回 TRUE，失败返回 FALSE
- * @author zxl
- * @date 2024-06-01
+ * @author zjh
+ * @date 2026-03-01
  */
 BOOL CComDlg::GetPasswordA(char outPass[129])
 {
@@ -157,8 +157,8 @@ BOOL CComDlg::GetPasswordA(char outPass[129])
  * 在非 Unicode 编译下按 ACP 编码转换，避免中文乱码。
  * @param const wchar_t* textW
  * @return CString 转换后的文本
- * @author zxl
- * @date 2024-06-01
+ * @author zjh
+ * @date 2026-03-01
  */
 static CString ToDialogTextByACP(const wchar_t* textW)
 {
@@ -180,8 +180,8 @@ static CString ToDialogTextByACP(const wchar_t* textW)
  * 通过统一转换后调用 AfxMessageBox。
  * @param const wchar_t* textW
  * @return void
- * @author zxl
- * @date 2024-06-01
+ * @author zjh
+ * @date 2026-03-01
  */
 static void ShowMsgByACP(const wchar_t* textW)
 {
@@ -368,8 +368,8 @@ void CComDlg::OnZjhProgress(int percent, int stage, unsigned long elapsedMs, uns
  * 根据选中文件和压缩参数执行压缩，并按选项执行删除或 CRC 校验。
  * 功能：执行压缩流程。
  * @return void
- * @author zxl
- * @date 2024-06-01
+ * @author zjh
+ * @date 2026-03-01
  */
 void CComDlg::OnOk()
 {
@@ -514,8 +514,8 @@ void CComDlg::OnOk()
  * 根据编译字符集选择直接添加或先转码再添加。
  * @param CComboBox* pCombo, const wchar_t* textW
  * @return void
- * @author zxl
- * @date 2024-06-01
+ * @author zjh
+ * @date 2026-03-01
  */
 static void AddComboTextByACP(CComboBox* pCombo, const wchar_t* textW)
 {
@@ -535,8 +535,8 @@ static void AddComboTextByACP(CComboBox* pCombo, const wchar_t* textW)
  * 功能：初始化压缩设置界面中的下拉选项。
  * 填充压缩方式/更新方式并设置默认项和下拉宽度。
  * @return BOOL
- * @author zxl
- * @date 2024-06-01
+ * @author zjh
+ * @date 2026-03-01
  */
 BOOL CComDlg::OnInitDialog()
 {
@@ -579,8 +579,8 @@ BOOL CComDlg::OnInitDialog()
  * 功能：处理取消模式消息。
  * 保持 CDialog 默认取消模式处理。
  * @return void
- * @author zxl
- * @date 2024-06-01
+ * @author zjh
+ * @date 2026-03-01
  */
 void CComDlg::OnCancelMode()
 {
@@ -592,8 +592,8 @@ void CComDlg::OnCancelMode()
  * 点击“设置密码”按钮，输入并更新压缩密码。
  * 功能：设置或清除压缩密码。
  * @return void
- * @author zxl
- * @date 2024-06-01
+ * @author zjh
+ * @date 2026-03-01
  */
 void CComDlg::OnSetpass()
 {
@@ -624,8 +624,8 @@ void CComDlg::OnSetpass()
  * 功能：浏览并选择待压缩文本文件。
  * 打开文件对话框并把选中的路径回填到输入框。
  * @return void
- * @author zxl
- * @date 2024-06-01
+ * @author zjh
+ * @date 2026-03-01
  */
 void CComDlg::OnOpen()
 {
