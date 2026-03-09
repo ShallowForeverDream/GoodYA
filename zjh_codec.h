@@ -53,6 +53,54 @@ public:
 		void* userData = 0);
 };
 
+class ZJH_encrypto3 {
+public:
+	bool encrypto(const std::string& path,
+		int len,
+		ZJH_ProgressCallback progressCallback = 0,
+		void* userData = 0);
+};
+
+class ZJH_encrypto4 {
+public:
+	bool encrypto(const std::string& path,
+		int len,
+		ZJH_ProgressCallback progressCallback = 0,
+		void* userData = 0);
+};
+
+class ZJH_encrypto5 {
+public:
+	bool encrypto(const std::string& path,
+		int len,
+		ZJH_ProgressCallback progressCallback = 0,
+		void* userData = 0);
+};
+
+class ZJH_encrypto6 {
+public:
+	bool encrypto(const std::string& path,
+		int len,
+		ZJH_ProgressCallback progressCallback = 0,
+		void* userData = 0);
+};
+
+class ZJH_encrypto7 {
+public:
+	bool encrypto(const std::string& path,
+		int len,
+		ZJH_ProgressCallback progressCallback = 0,
+		void* userData = 0);
+};
+
+class ZJH_encrypto8 {
+public:
+	bool encrypto(const std::string& path,
+		int len,
+		ZJH_ProgressCallback progressCallback = 0,
+		void* userData = 0);
+};
+
 class ZJH_decrypto {
 public:
 	bool decrypto(const std::string& path, const char* password = 0);

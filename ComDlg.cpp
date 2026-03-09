@@ -414,11 +414,7 @@ void CComDlg::OnOk()
 		char codePath[500] = {0};
 		strncpy(codePath, loadPath, sizeof(codePath) - 1);
 		codePath[sizeof(codePath) - 1] = '\0';
-		char* pExt = strrchr(codePath, '.');
-		if (pExt != NULL)
-			strcpy(pExt + 1, "huf");
-		else
-			strcat(codePath, ".huf");
+		strcat(codePath, ".huf");
 
 		if (!huffman.SaveCodeToFile(codePath, pEncryptPass, crcBefore))
 		{
@@ -639,6 +635,5 @@ void CComDlg::OnOpen()
 	{
 		m_strFileName = fileDlg.GetPathName();
 		SetDlgItemText(IDC_EDIT1, m_strFileName);
-		UpdateData(FALSE);
 	}
 }
