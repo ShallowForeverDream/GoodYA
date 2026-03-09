@@ -6,6 +6,7 @@
 #include <fstream>
 #include <map>
 #include <queue>
+#include <set>
 #include <string>
 #include <vector>
 #include <cstring>
@@ -25,6 +26,10 @@ namespace {
 // len 的合法范围：每个“符号”由 1~10 个 bit 组成。
 const int MAX_LEN = 10;
 const int MAX_SYMBOLS = (1 << MAX_LEN);
+const int MAX_CANDIDATES_PER_INTERNAL = 12;
+const int MAX_CANDIDATES_TOTAL = 4096;
+const int MAX_CHECK_TRIALS_PER_ROUND = MAX_CANDIDATES_TOTAL;
+const long double KRAFT_EPS = 1e-15L;
 
 // 三类负载魔数：
 // ENC1: 早期表项自带码字位串版本；
@@ -447,9 +452,8 @@ public:
 		clearNodes();
 		root_ = NULL;
 		originalBits_ = 0;
-		checkBits_.clear();
-		ways_.clear();
-		acNodes_.clear();
+		codeTrie_.clear();
+		internalFollowingSymbols_.clear();
 
 		if (!readInput(inputPath))
 			return false;
@@ -459,7 +463,8 @@ public:
 			// 非空输入时构建编码树与码表；空输入直接输出空负载结构。
 			ReportProgress(progressCtx_, 32, ZJH_PROGRESS_STAGE_BUILD_TREE, true);
 			buildHuffmanTree();
-			assignCodes(root_, "");
+			std::string pathBits;
+			assignCodesWithBuffer(root_, pathBits);
 			if (usedSymbols_.size() == 1)
 				codes_[(size_t)usedSymbols_[0]] = "0";
 			ReportProgress(progressCtx_, 45, ZJH_PROGRESS_STAGE_BUILD_TREE, true);
@@ -516,17 +521,26 @@ private:
 		}
 	};
 
-	struct ACNode
+	struct CandidateMove
 	{
-		// AC 自动机节点，用于“给定码字集合”上的线性 DP 分词计数。
-		// 目的：检测当前码表对目标位串是否“唯一可解”。
+		unsigned __int64 gainBits;
+		int internalIdx;
+		int leafIdx;
+
+		CandidateMove()
+			: gainBits(0), internalIdx(-1), leafIdx(-1)
+		{
+		}
+	};
+
+	struct CodeTrieNode
+	{
 		int next0;
 		int next1;
-		int fail;
-		std::vector<unsigned short> outLengths;
+		std::vector<int> terminalSymbols;
 
-		ACNode()
-			: next0(-1), next1(-1), fail(0)
+		CodeTrieNode()
+			: next0(-1), next1(-1)
 		{
 		}
 	};
@@ -541,11 +555,9 @@ private:
 	std::vector<Node*> nodes_;
 	Node* root_;
 	unsigned __int64 originalBits_;
-
-	std::vector<unsigned char> checkBits_;
-	std::vector<unsigned char> ways_;
-	std::vector<ACNode> acNodes_;
 	ProgressContext* progressCtx_;
+	std::vector<CodeTrieNode> codeTrie_;
+	std::vector< std::vector<int> > internalFollowingSymbols_;
 
 	void clearNodes()
 	{
@@ -656,9 +668,11 @@ private:
 		}
 	}
 
-	void assignCodes(Node* node, const std::string& current)
+	void assignCodesWithBuffer(Node* node, std::string& current)
 	{
-		// DFS 生成码表：左边追加 0，右边追加 1。
+		// 论文说明：
+		// 1) 采用“路径缓冲区 push/pop”替代“递归字符串拼接”，减少临时对象构造；
+		// 2) 在编码树较深、符号数较多时，该方式可显著降低分配与拷贝开销。
 		if (node == NULL)
 			return;
 
@@ -666,162 +680,676 @@ private:
 		if (node->symbol != -1)
 			codes_[(size_t)node->symbol] = current;
 
-		assignCodes(node->left, current + "0");
-		assignCodes(node->right, current + "1");
+		current += '0';
+		assignCodesWithBuffer(node->left, current);
+		current.resize(current.size() - 1);
+
+		current += '1';
+		assignCodesWithBuffer(node->right, current);
+		current.resize(current.size() - 1);
 	}
 
-	bool buildCheckBitstream()
+	bool startsWith(const std::string& text, const std::string& prefix) const
 	{
-		// 将“输入符号序列”按当前码表展开为一条位串，用于唯一可解性验证。
-		size_t bitCount = 0;
-		for (size_t i = 0; i < inputSymbols_.size(); ++i)
+		// 判断 text 是否以 prefix 起始（VC6 兼容实现）。
+		return text.size() >= prefix.size() &&
+			text.compare(0, prefix.size(), prefix) == 0;
+	}
+
+	bool checkUniqueDecodeFast()
+	{
+		// 论文说明（核心优化）：
+		// 采用 Sardinas-Patterson 唯一可解判定，仅依赖“码字集合”而非“全文位串”：
+		// - 旧实现复杂度与输入位串长度相关，长文件下开销较大；
+		// - 新实现复杂度主要由码字集合规模决定（最多 2^len，len<=10）。
+		// 判定结论：
+		// - 若推导过程中出现空后缀，则存在两种分解，非唯一可解；
+		// - 若状态集合闭包收敛且未出现空后缀，则唯一可解。
+		std::vector<const std::string*> codeList;
+		codeList.reserve(usedSymbols_.size());
+
+		std::set<std::string> uniqueCodes;
+		for (size_t i = 0; i < usedSymbols_.size(); ++i)
 		{
-			const std::string& code = codes_[(size_t)inputSymbols_[i]];
+			const std::string& code = codes_[(size_t)usedSymbols_[i]];
 			if (code.empty())
 				return false;
-			bitCount += code.size();
+
+			std::pair<std::set<std::string>::iterator, bool> inserted = uniqueCodes.insert(code);
+			if (!inserted.second)
+				return false; // 码字重复 => 必然非唯一可解
+
+			codeList.push_back(&code);
 		}
 
-		checkBits_.clear();
-		checkBits_.reserve(bitCount);
+		if (codeList.size() <= 1)
+			return true;
 
-		for (size_t j = 0; j < inputSymbols_.size(); ++j)
+		std::set<std::string> visited;
+		std::queue<std::string> pending;
+
+		for (size_t pairI = 0; pairI < codeList.size(); ++pairI)
 		{
-			const std::string& code = codes_[(size_t)inputSymbols_[j]];
-			for (size_t k = 0; k < code.size(); ++k)
-				checkBits_.push_back((unsigned char)(code[k] == '1'));
+			for (size_t j = 0; j < codeList.size(); ++j)
+			{
+				if (pairI == j)
+					continue;
+
+				const std::string& a = *codeList[pairI];
+				const std::string& b = *codeList[j];
+				if (startsWith(b, a))
+				{
+					std::string suffix = b.substr(a.size());
+					if (suffix.empty())
+						return false;
+					if (visited.insert(suffix).second)
+						pending.push(suffix);
+				}
+			}
 		}
+
+		while (!pending.empty())
+		{
+			std::string state = pending.front();
+			pending.pop();
+
+			for (size_t ci = 0; ci < codeList.size(); ++ci)
+			{
+				const std::string& code = *codeList[ci];
+
+				if (startsWith(state, code))
+				{
+					std::string suffix = state.substr(code.size());
+					if (suffix.empty())
+						return false;
+					if (visited.insert(suffix).second)
+						pending.push(suffix);
+				}
+
+				if (startsWith(code, state))
+				{
+					std::string suffix = code.substr(state.size());
+					if (suffix.empty())
+						return false;
+					if (visited.insert(suffix).second)
+						pending.push(suffix);
+				}
+			}
+		}
+
 		return true;
 	}
 
-	bool buildCheckAutomaton()
+	void collectNodes(std::vector<Node*>& internals, std::vector<Node*>& leaves)
 	{
-		// 把“所有码字”构建为 AC 自动机：
-		// 运行时可在 O(m + 匹配数) 内找出每个位置的可结束码字长度。
-		acNodes_.clear();
-		acNodes_.push_back(ACNode());
+		internals.clear();
+		leaves.clear();
+		if (root_ == NULL)
+			return;
+
+		std::queue<Node*> q;
+		q.push(root_);
+		while (!q.empty())
+		{
+			Node* current = q.front();
+			q.pop();
+
+			if (current->symbol != -1)
+			{
+				leaves.push_back(current);
+			}
+			else if (!current->pathBits.empty() &&
+				(current->left != NULL || current->right != NULL))
+			{
+				internals.push_back(current);
+			}
+
+			if (current->left != NULL)
+				q.push(current->left);
+			if (current->right != NULL)
+				q.push(current->right);
+		}
+	}
+
+	long double codeWeight(int length) const
+	{
+		long double w = 1.0L;
+		for (int i = 0; i < length; ++i)
+			w *= 0.5L;
+		return w;
+	}
+
+	void adjustCodeCount(std::map<std::string, int>& codeCount,
+		const std::string& key,
+		int delta)
+	{
+		std::map<std::string, int>::iterator it = codeCount.find(key);
+		if (it == codeCount.end())
+		{
+			if (delta > 0)
+				codeCount[key] = delta;
+			return;
+		}
+
+		it->second += delta;
+		if (it->second == 0)
+			codeCount.erase(it);
+	}
+
+	void buildCodeTrie()
+	{
+		codeTrie_.clear();
+		codeTrie_.push_back(CodeTrieNode());
 
 		for (size_t i = 0; i < usedSymbols_.size(); ++i)
 		{
 			int symbol = usedSymbols_[i];
 			const std::string& code = codes_[(size_t)symbol];
 			if (code.empty())
-				return false;
+				continue;
 
 			int node = 0;
 			for (size_t j = 0; j < code.size(); ++j)
 			{
 				int bit = (code[j] == '1') ? 1 : 0;
-				int nextRef = (bit == 0) ? acNodes_[(size_t)node].next0 : acNodes_[(size_t)node].next1;
-				if (nextRef == -1)
+				int next = (bit == 0) ? codeTrie_[(size_t)node].next0 : codeTrie_[(size_t)node].next1;
+				if (next == -1)
 				{
-					nextRef = (int)acNodes_.size();
+					next = (int)codeTrie_.size();
 					if (bit == 0)
-						acNodes_[(size_t)node].next0 = nextRef;
+						codeTrie_[(size_t)node].next0 = next;
 					else
-						acNodes_[(size_t)node].next1 = nextRef;
-					acNodes_.push_back(ACNode());
+						codeTrie_[(size_t)node].next1 = next;
+					codeTrie_.push_back(CodeTrieNode());
 				}
-				node = nextRef;
+				node = next;
 			}
-			acNodes_[(size_t)node].outLengths.push_back((unsigned short)code.size());
+			codeTrie_[(size_t)node].terminalSymbols.push_back(symbol);
 		}
-
-		std::queue<int> q;
-		for (int bit = 0; bit < 2; ++bit)
-		{
-			int child = (bit == 0) ? acNodes_[0].next0 : acNodes_[0].next1;
-			if (child == -1)
-			{
-				if (bit == 0)
-					acNodes_[0].next0 = 0;
-				else
-					acNodes_[0].next1 = 0;
-				continue;
-			}
-			acNodes_[(size_t)child].fail = 0;
-			q.push(child);
-		}
-
-		while (!q.empty())
-		{
-			int node = q.front();
-			q.pop();
-
-			for (int bit = 0; bit < 2; ++bit)
-			{
-				int child = (bit == 0) ? acNodes_[(size_t)node].next0 : acNodes_[(size_t)node].next1;
-				if (child == -1)
-				{
-					int failState = acNodes_[(size_t)node].fail;
-					int jump = (bit == 0) ? acNodes_[(size_t)failState].next0 : acNodes_[(size_t)failState].next1;
-					if (bit == 0)
-						acNodes_[(size_t)node].next0 = jump;
-					else
-						acNodes_[(size_t)node].next1 = jump;
-					continue;
-				}
-
-				int failState = acNodes_[(size_t)node].fail;
-				int nextFail = (bit == 0) ? acNodes_[(size_t)failState].next0 : acNodes_[(size_t)failState].next1;
-				acNodes_[(size_t)child].fail = nextFail;
-
-				std::vector<unsigned short>& childOut = acNodes_[(size_t)child].outLengths;
-				const std::vector<unsigned short>& failOut = acNodes_[(size_t)nextFail].outLengths;
-				for (size_t oi = 0; oi < failOut.size(); ++oi)
-					childOut.push_back(failOut[oi]);
-				q.push(child);
-			}
-		}
-
-		return true;
 	}
 
-	bool checkUniqueDecodeFast()
+	bool canSegmentSuffixExcludingSymbol(const std::string& bits,
+		size_t start,
+		int bannedSymbol) const
 	{
-		// 唯一可解判定（核心）：
-		// ways[i] 表示前 i 位的可分解方案数（截断到 0/1/2，2 表示“至少两种”）。
-		// 结论：ways[m] == 1 才是“唯一可解”。
-		if (!buildCheckBitstream())
-			return false;
-		if (checkBits_.empty())
-			return true;
-		if (!buildCheckAutomaton())
+		if (start >= bits.size() || codeTrie_.empty())
 			return false;
 
-		size_t m = checkBits_.size();
-		ways_.assign(m + 1, 0);
-		ways_[0] = 1;
+		std::vector<unsigned char> reachable(bits.size() + 1, 0);
+		reachable[start] = 1;
 
-		int state = 0;
-		for (size_t i = 0; i < m; ++i)
+		for (size_t i = start; i < bits.size(); ++i)
 		{
-			state = checkBits_[i] ? acNodes_[(size_t)state].next1 : acNodes_[(size_t)state].next0;
-			unsigned char waysHere = 0;
-			const std::vector<unsigned short>& outs = acNodes_[(size_t)state].outLengths;
-			for (size_t j = 0; j < outs.size(); ++j)
+			if (reachable[i] == 0)
+				continue;
+
+			int node = 0;
+			for (size_t j = i; j < bits.size(); ++j)
 			{
-				unsigned short length = outs[j];
-				if (length == 0 || (size_t)length > i + 1)
-					continue;
-				int sum = (int)waysHere + (int)ways_[i + 1 - (size_t)length];
-				if (sum > 2) sum = 2;
-				waysHere = (unsigned char)sum;
-				if (waysHere == 2)
+				int bit = (bits[j] == '1') ? 1 : 0;
+				int next = (bit == 0) ? codeTrie_[(size_t)node].next0 : codeTrie_[(size_t)node].next1;
+				if (next == -1)
 					break;
+				node = next;
+
+				const std::vector<int>& terms = codeTrie_[(size_t)node].terminalSymbols;
+				for (size_t ti = 0; ti < terms.size(); ++ti)
+				{
+					if (terms[ti] == bannedSymbol)
+						continue;
+					reachable[j + 1] = 1;
+				}
 			}
-			ways_[i + 1] = waysHere;
+
+			if (reachable[bits.size()] != 0)
+				return true;
 		}
 
-		return ways_[m] == 1;
+		return reachable[bits.size()] != 0;
+	}
+
+	void addWaysCap2(std::vector<unsigned char>& ways, size_t index, unsigned char value) const
+	{
+		if (value == 0 || index >= ways.size())
+			return;
+
+		int merged = (int)ways[index] + (int)value;
+		if (merged > 2)
+			merged = 2;
+		ways[index] = (unsigned char)merged;
+	}
+
+	bool hasMultipleSegmentationsWithCandidate(const std::string& bits,
+		int bannedSymbol,
+		const std::string& newCode) const
+	{
+		if (bits.empty() || newCode.empty() || codeTrie_.empty())
+			return false;
+
+		std::vector<unsigned char> ways(bits.size() + 1, 0);
+		ways[0] = 1;
+		size_t newLen = newCode.size();
+
+		for (size_t i = 0; i < bits.size(); ++i)
+		{
+			unsigned char curWays = ways[i];
+			if (curWays == 0)
+				continue;
+
+			int node = 0;
+			for (size_t j = i; j < bits.size(); ++j)
+			{
+				int bit = (bits[j] == '1') ? 1 : 0;
+				int next = (bit == 0) ? codeTrie_[(size_t)node].next0 : codeTrie_[(size_t)node].next1;
+				if (next == -1)
+					break;
+				node = next;
+
+				const std::vector<int>& terms = codeTrie_[(size_t)node].terminalSymbols;
+				for (size_t ti = 0; ti < terms.size(); ++ti)
+				{
+					if (terms[ti] == bannedSymbol)
+						continue;
+					addWaysCap2(ways, j + 1, curWays);
+					if (ways[bits.size()] >= 2)
+						return true;
+				}
+			}
+
+			if (i + newLen <= bits.size() && bits.compare(i, newLen, newCode) == 0)
+			{
+				addWaysCap2(ways, i + newLen, curWays);
+				if (ways[bits.size()] >= 2)
+					return true;
+			}
+		}
+
+		return ways[bits.size()] >= 2;
+	}
+
+	bool quickAmbiguityWitnessAfterMove(int bannedSymbol,
+		const std::string& newCode) const
+	{
+		if (newCode.empty())
+			return false;
+
+		if (hasMultipleSegmentationsWithCandidate(newCode, bannedSymbol, newCode))
+			return true;
+
+		std::string probe;
+		probe.reserve(newCode.size() * 2 + 32);
+
+		probe = newCode;
+		probe += newCode;
+		if (hasMultipleSegmentationsWithCandidate(probe, bannedSymbol, newCode))
+			return true;
+
+		for (size_t i = 0; i < usedSymbols_.size(); ++i)
+		{
+			int symbol = usedSymbols_[i];
+			if (symbol == bannedSymbol)
+				continue;
+
+			const std::string& code = codes_[(size_t)symbol];
+			if (code.empty())
+				continue;
+
+			probe = newCode;
+			probe += code;
+			if (hasMultipleSegmentationsWithCandidate(probe, bannedSymbol, newCode))
+				return true;
+
+			probe = code;
+			probe += newCode;
+			if (hasMultipleSegmentationsWithCandidate(probe, bannedSymbol, newCode))
+				return true;
+		}
+
+		return false;
+	}
+
+	void buildInternalFollowingSymbols(const std::vector<Node*>& internals)
+	{
+		internalFollowingSymbols_.clear();
+		internalFollowingSymbols_.resize(internals.size());
+
+		for (size_t internalIdx = 0; internalIdx < internals.size(); ++internalIdx)
+		{
+			const Node* internal = internals[internalIdx];
+			if (internal == NULL || internal->pathBits.empty())
+				continue;
+
+			const std::string& prefix = internal->pathBits;
+			std::vector<int>& followers = internalFollowingSymbols_[internalIdx];
+			followers.reserve(usedSymbols_.size());
+
+			for (size_t i = 0; i < usedSymbols_.size(); ++i)
+			{
+				int symbol = usedSymbols_[i];
+				const std::string& code = codes_[(size_t)symbol];
+				if (code.size() <= prefix.size())
+					continue;
+				if (startsWith(code, prefix))
+					followers.push_back(symbol);
+			}
+		}
+	}
+
+	bool guaranteedAmbiguousAfterMove(const CandidateMove& candidate,
+		const std::vector<Node*>& internals,
+		const std::vector<Node*>& leaves) const
+	{
+		if (candidate.internalIdx < 0 || candidate.internalIdx >= (int)internals.size())
+			return false;
+		if (candidate.leafIdx < 0 || candidate.leafIdx >= (int)leaves.size())
+			return false;
+
+		const Node* internal = internals[(size_t)candidate.internalIdx];
+		const Node* leaf = leaves[(size_t)candidate.leafIdx];
+		if (internal == NULL || leaf == NULL || leaf->symbol == -1)
+			return false;
+
+		int bannedSymbol = leaf->symbol;
+		const std::string& newCode = internal->pathBits;
+		if (newCode.empty())
+			return false;
+
+		if (canSegmentSuffixExcludingSymbol(newCode, 0, bannedSymbol))
+			return true;
+
+		if ((size_t)candidate.internalIdx >= internalFollowingSymbols_.size())
+			return false;
+
+		const std::vector<int>& followers = internalFollowingSymbols_[(size_t)candidate.internalIdx];
+		for (size_t i = 0; i < followers.size(); ++i)
+		{
+			int symbol = followers[i];
+			if (symbol == bannedSymbol)
+				continue;
+
+			const std::string& code = codes_[(size_t)symbol];
+			if (code.size() <= newCode.size())
+				continue;
+
+			if (canSegmentSuffixExcludingSymbol(code, newCode.size(), bannedSymbol))
+				return true;
+		}
+
+		if (quickAmbiguityWitnessAfterMove(bannedSymbol, newCode))
+			return true;
+
+		return false;
+	}
+
+	bool isLeafBetterByFreq(const std::vector<Node*>& leaves, int lhs, int rhs) const
+	{
+		const Node* left = leaves[(size_t)lhs];
+		const Node* right = leaves[(size_t)rhs];
+		int leftSymbol = left->symbol;
+		int rightSymbol = right->symbol;
+		int leftFreq = freq_[(size_t)leftSymbol];
+		int rightFreq = freq_[(size_t)rightSymbol];
+
+		if (leftFreq != rightFreq)
+			return leftFreq > rightFreq;
+
+		return codes_[(size_t)leftSymbol].size() > codes_[(size_t)rightSymbol].size();
+	}
+
+	bool isLeafBetterByDepth(const std::vector<Node*>& leaves, int lhs, int rhs) const
+	{
+		const Node* left = leaves[(size_t)lhs];
+		const Node* right = leaves[(size_t)rhs];
+		int leftSymbol = left->symbol;
+		int rightSymbol = right->symbol;
+		size_t leftLen = codes_[(size_t)leftSymbol].size();
+		size_t rightLen = codes_[(size_t)rightSymbol].size();
+
+		if (leftLen != rightLen)
+			return leftLen > rightLen;
+
+		return freq_[(size_t)leftSymbol] > freq_[(size_t)rightSymbol];
+	}
+
+	void sortLeafOrderByFreq(std::vector<int>& order, const std::vector<Node*>& leaves) const
+	{
+		for (size_t i = 0; i < order.size(); ++i)
+		{
+			size_t best = i;
+			for (size_t j = i + 1; j < order.size(); ++j)
+			{
+				if (isLeafBetterByFreq(leaves, order[j], order[best]))
+					best = j;
+			}
+			if (best != i)
+				std::swap(order[i], order[best]);
+		}
+	}
+
+	void sortLeafOrderByDepth(std::vector<int>& order, const std::vector<Node*>& leaves) const
+	{
+		for (size_t i = 0; i < order.size(); ++i)
+		{
+			size_t best = i;
+			for (size_t j = i + 1; j < order.size(); ++j)
+			{
+				if (isLeafBetterByDepth(leaves, order[j], order[best]))
+					best = j;
+			}
+			if (best != i)
+				std::swap(order[i], order[best]);
+		}
+	}
+
+	bool isCandidateBetter(const CandidateMove& lhs,
+		const CandidateMove& rhs,
+		const std::vector<Node*>& internals) const
+	{
+		if (lhs.gainBits != rhs.gainBits)
+			return lhs.gainBits > rhs.gainBits;
+
+		size_t leftLen = internals[(size_t)lhs.internalIdx]->pathBits.size();
+		size_t rightLen = internals[(size_t)rhs.internalIdx]->pathBits.size();
+		return leftLen < rightLen;
+	}
+
+	void sortCandidateFrontier(std::vector<CandidateMove>& candidates,
+		const std::vector<Node*>& internals) const
+	{
+		for (size_t i = 0; i < candidates.size(); ++i)
+		{
+			size_t best = i;
+			for (size_t j = i + 1; j < candidates.size(); ++j)
+			{
+				if (isCandidateBetter(candidates[j], candidates[best], internals))
+					best = j;
+			}
+			if (best != i)
+				std::swap(candidates[i], candidates[best]);
+		}
+	}
+
+	void tryAddFrontierCandidate(int internalIdx,
+		int leafIdx,
+		const std::vector<Node*>& internals,
+		const std::vector<Node*>& leaves,
+		const std::map<std::string, int>& codeCount,
+		long double kraftSum,
+		std::set<unsigned __int64>& seenPair,
+		int& picked,
+		std::vector<CandidateMove>& out) const
+	{
+		if (picked >= MAX_CANDIDATES_PER_INTERNAL)
+			return;
+
+		const Node* internal = internals[(size_t)internalIdx];
+		const Node* leaf = leaves[(size_t)leafIdx];
+		if (internal == NULL || leaf == NULL || leaf->symbol == -1)
+			return;
+
+		int symbol = leaf->symbol;
+		const std::string& oldCode = codes_[(size_t)symbol];
+		if (oldCode.empty())
+			return;
+
+		int oldLen = (int)oldCode.size();
+		int newLen = (int)internal->pathBits.size();
+		if (oldLen <= newLen)
+			return;
+
+		const std::string& candidateCode = internal->pathBits;
+		if (candidateCode == oldCode)
+			return;
+
+		std::map<std::string, int>::const_iterator dupIt = codeCount.find(candidateCode);
+		if (dupIt != codeCount.end() && dupIt->second > 0)
+			return;
+
+		long double nextKraft = kraftSum - codeWeight(oldLen) + codeWeight(newLen);
+		if (nextKraft > 1.0L + KRAFT_EPS)
+			return;
+
+		unsigned __int64 key = (((unsigned __int64)(unsigned long)internalIdx) << 32) |
+			(unsigned long)(unsigned int)symbol;
+		if (seenPair.find(key) != seenPair.end())
+			return;
+		seenPair.insert(key);
+
+		unsigned __int64 gain = (unsigned __int64)freq_[(size_t)symbol] *
+			(unsigned __int64)(oldLen - newLen);
+		if (gain == 0)
+			return;
+
+		CandidateMove item;
+		item.gainBits = gain;
+		item.internalIdx = internalIdx;
+		item.leafIdx = leafIdx;
+		out.push_back(item);
+		++picked;
+	}
+
+	void buildCandidateFrontier(const std::vector<Node*>& internals,
+		const std::vector<Node*>& leaves,
+		const std::map<std::string, int>& codeCount,
+		long double kraftSum,
+		std::vector<CandidateMove>& out)
+	{
+		out.clear();
+		if (internals.empty() || leaves.empty())
+			return;
+
+		std::vector<int> leafOrderByFreq;
+		leafOrderByFreq.reserve(leaves.size());
+		for (int i = 0; i < (int)leaves.size(); ++i)
+			leafOrderByFreq.push_back(i);
+		sortLeafOrderByFreq(leafOrderByFreq, leaves);
+
+		std::vector<int> leafOrderByDepth = leafOrderByFreq;
+		sortLeafOrderByDepth(leafOrderByDepth, leaves);
+
+		std::set<unsigned __int64> seenPair;
+		for (int internalIdx = 0; internalIdx < (int)internals.size(); ++internalIdx)
+		{
+			int picked = 0;
+
+			for (size_t fi = 0; fi < leafOrderByFreq.size(); ++fi)
+			{
+				tryAddFrontierCandidate(internalIdx,
+					leafOrderByFreq[fi],
+					internals,
+					leaves,
+					codeCount,
+					kraftSum,
+					seenPair,
+					picked,
+					out);
+				if (picked >= MAX_CANDIDATES_PER_INTERNAL)
+					break;
+			}
+
+			for (size_t di = 0; di < leafOrderByDepth.size(); ++di)
+			{
+				tryAddFrontierCandidate(internalIdx,
+					leafOrderByDepth[di],
+					internals,
+					leaves,
+					codeCount,
+					kraftSum,
+					seenPair,
+					picked,
+					out);
+				if (picked >= MAX_CANDIDATES_PER_INTERNAL)
+					break;
+			}
+		}
+
+		sortCandidateFrontier(out, internals);
+		if (out.size() > (size_t)MAX_CANDIDATES_TOTAL)
+			out.resize((size_t)MAX_CANDIDATES_TOTAL);
+	}
+
+	bool tryCandidate(const CandidateMove& candidate,
+		const std::vector<Node*>& internals,
+		const std::vector<Node*>& leaves,
+		std::map<std::string, int>& codeCount,
+		long double& kraftSum)
+	{
+		Node* internal = internals[(size_t)candidate.internalIdx];
+		Node* leaf = leaves[(size_t)candidate.leafIdx];
+		if (internal == NULL || leaf == NULL)
+			return false;
+		if (internal->symbol != -1 || leaf->symbol == -1)
+			return false;
+
+		int leafSymbol = leaf->symbol;
+		std::string oldCode = codes_[(size_t)leafSymbol];
+		const std::string& newCode = internal->pathBits;
+		if (oldCode.empty() || newCode.empty())
+			return false;
+
+		int oldLen = (int)oldCode.size();
+		int newLen = (int)newCode.size();
+		if (oldLen <= newLen)
+			return false;
+		if (oldCode == newCode)
+			return false;
+
+		std::map<std::string, int>::iterator dupIt = codeCount.find(newCode);
+		if (dupIt != codeCount.end() && dupIt->second > 0)
+			return false;
+
+		long double nextKraft = kraftSum - codeWeight(oldLen) + codeWeight(newLen);
+		if (nextKraft > 1.0L + KRAFT_EPS)
+			return false;
+
+		if (guaranteedAmbiguousAfterMove(candidate, internals, leaves))
+			return false;
+
+		adjustCodeCount(codeCount, oldCode, -1);
+		adjustCodeCount(codeCount, newCode, +1);
+		codes_[(size_t)leafSymbol] = newCode;
+		std::swap(internal->symbol, leaf->symbol);
+		long double oldKraft = kraftSum;
+		kraftSum = nextKraft;
+
+		if (checkUniqueDecodeFast())
+			return true;
+
+		std::swap(internal->symbol, leaf->symbol);
+		codes_[(size_t)leafSymbol] = oldCode;
+		kraftSum = oldKraft;
+		adjustCodeCount(codeCount, newCode, -1);
+		adjustCodeCount(codeCount, oldCode, +1);
+		return false;
 	}
 
 	void relaxTreeForUniqueDecode()
 	{
-		// 可重前缀调整策略：
-		// 在 BFS 节点序上尝试“内部节点与叶子节点符号互换”，并实时做唯一可解校验；
-		// 一旦找到满足 unique decode 的方案即停止。
-		if (root_ == NULL)
+		// v8 调整策略（论文最新版）：
+		// 1) 候选前沿（frontier）按收益优先，限制单轮候选规模；
+		// 2) 通过 Trie + DP 做“必失败候选”预剪枝，再进入 SP 判定；
+		// 3) 采用多轮迭代，每轮接受一次成功提升，直到整轮无改进。
+		if (root_ == NULL || usedSymbols_.size() <= 1)
 		{
 			ReportProgress(progressCtx_, 65, ZJH_PROGRESS_STAGE_OPTIMIZE_CODE, true);
 			return;
@@ -829,95 +1357,59 @@ private:
 
 		ReportProgress(progressCtx_, 46, ZJH_PROGRESS_STAGE_OPTIMIZE_CODE, true);
 
-		std::vector<Node*> bfsNodes;
-		std::queue<Node*> q;
-		q.push(root_);
-		while (!q.empty())
-		{
-			Node* current = q.front();
-			q.pop();
-			bfsNodes.push_back(current);
-			if (current->left != NULL) q.push(current->left);
-			if (current->right != NULL) q.push(current->right);
-		}
-
 		std::map<std::string, int> codeCount;
+		long double kraftSum = 0.0L;
 		for (size_t i = 0; i < usedSymbols_.size(); ++i)
 		{
-			const std::string& key = codes_[(size_t)usedSymbols_[i]];
-			codeCount[key] = codeCount[key] + 1;
+			int symbol = usedSymbols_[i];
+			const std::string& code = codes_[(size_t)symbol];
+			codeCount[code] = codeCount[code] + 1;
+			kraftSum += codeWeight((int)code.size());
 		}
 
-		int nodeCount = (int)bfsNodes.size();
-		unsigned __int64 totalChecks = 0;
-		for (int ti = 0; ti < nodeCount; ++ti)
-			totalChecks += (unsigned __int64)(nodeCount - ti - 1);
-		unsigned __int64 checked = 0;
-
-		for (int nodeIndex = 0; nodeIndex < nodeCount; ++nodeIndex)
+		for (;;)
 		{
-			Node* internal = bfsNodes[(size_t)nodeIndex];
-			if (internal->symbol != -1 || internal->pathBits.empty())
-				continue;
+			std::vector<Node*> internals;
+			std::vector<Node*> leaves;
+			collectNodes(internals, leaves);
+			if (internals.empty() || leaves.empty())
+				break;
 
-			for (int j = nodeCount - 1; j > nodeIndex; --j)
+			buildCodeTrie();
+			buildInternalFollowingSymbols(internals);
+
+			std::vector<CandidateMove> frontier;
+			buildCandidateFrontier(internals, leaves, codeCount, kraftSum, frontier);
+			if (frontier.empty())
+				break;
+
+			bool improvedThisRound = false;
+			int roundLimit = (int)frontier.size();
+			if (roundLimit > MAX_CHECK_TRIALS_PER_ROUND)
+				roundLimit = MAX_CHECK_TRIALS_PER_ROUND;
+
+			for (int tested = 0; tested < roundLimit; ++tested)
 			{
-				++checked;
-				if (((checked & 0x3F) == 0) || checked == totalChecks)
+				if (((tested & 0x3F) == 0) || (tested + 1 == roundLimit))
 				{
 					ReportStageProgress(progressCtx_,
 						ZJH_PROGRESS_STAGE_OPTIMIZE_CODE,
-						checked,
-						(totalChecks == 0) ? 1 : totalChecks,
+						(unsigned __int64)(tested + 1),
+						(unsigned __int64)(roundLimit > 0 ? roundLimit : 1),
 						46,
-						65,
-						(checked == totalChecks));
+						64,
+						(tested + 1 == roundLimit));
 				}
 
-				Node* leaf = bfsNodes[(size_t)j];
-				if (leaf->symbol == -1)
-					continue;
-
-				int leafSymbol = leaf->symbol;
-				const std::string previousCode = codes_[(size_t)leafSymbol];
-				const std::string& candidateCode = internal->pathBits;
-				if (candidateCode == previousCode)
-					continue;
-
-				std::map<std::string, int>::iterator dupIt = codeCount.find(candidateCode);
-				if (dupIt != codeCount.end() && dupIt->second > 0)
-					continue;
-
-				std::map<std::string, int>::iterator prevIt = codeCount.find(previousCode);
-				if (prevIt != codeCount.end())
+				if (tryCandidate(frontier[(size_t)tested], internals, leaves, codeCount, kraftSum))
 				{
-					prevIt->second -= 1;
-					if (prevIt->second == 0)
-						codeCount.erase(prevIt);
+					improvedThisRound = true;
+					break;
 				}
-				codeCount[candidateCode] = codeCount[candidateCode] + 1;
-
-				codes_[(size_t)leafSymbol] = candidateCode;
-				std::swap(internal->symbol, leaf->symbol);
-
-				if (checkUniqueDecodeFast())
-				{
-					ReportProgress(progressCtx_, 65, ZJH_PROGRESS_STAGE_OPTIMIZE_CODE, true);
-					return;
-				}
-
-				std::swap(internal->symbol, leaf->symbol);
-				codes_[(size_t)leafSymbol] = previousCode;
-
-				std::map<std::string, int>::iterator candIt = codeCount.find(candidateCode);
-				if (candIt != codeCount.end())
-				{
-					candIt->second -= 1;
-					if (candIt->second == 0)
-						codeCount.erase(candIt);
-				}
-				codeCount[previousCode] = codeCount[previousCode] + 1;
 			}
+
+			if (!improvedThisRound)
+				break;
 		}
 
 		ReportProgress(progressCtx_, 65, ZJH_PROGRESS_STAGE_OPTIMIZE_CODE, true);
@@ -1687,6 +2179,55 @@ bool ZJH_encrypto2::encrypto(const std::string& path,
 	void* userData)
 {
 	// 兼容保留接口：当前行为与 ZJH_encrypto::encrypto 一致。
+	return EncodeToFile(path, len, NULL, progressCallback, userData);
+}
+
+bool ZJH_encrypto3::encrypto(const std::string& path,
+	int len,
+	ZJH_ProgressCallback progressCallback,
+	void* userData)
+{
+	// 论文版本兼容入口：当前统一走最新版优化主干。
+	return EncodeToFile(path, len, NULL, progressCallback, userData);
+}
+
+bool ZJH_encrypto4::encrypto(const std::string& path,
+	int len,
+	ZJH_ProgressCallback progressCallback,
+	void* userData)
+{
+	return EncodeToFile(path, len, NULL, progressCallback, userData);
+}
+
+bool ZJH_encrypto5::encrypto(const std::string& path,
+	int len,
+	ZJH_ProgressCallback progressCallback,
+	void* userData)
+{
+	return EncodeToFile(path, len, NULL, progressCallback, userData);
+}
+
+bool ZJH_encrypto6::encrypto(const std::string& path,
+	int len,
+	ZJH_ProgressCallback progressCallback,
+	void* userData)
+{
+	return EncodeToFile(path, len, NULL, progressCallback, userData);
+}
+
+bool ZJH_encrypto7::encrypto(const std::string& path,
+	int len,
+	ZJH_ProgressCallback progressCallback,
+	void* userData)
+{
+	return EncodeToFile(path, len, NULL, progressCallback, userData);
+}
+
+bool ZJH_encrypto8::encrypto(const std::string& path,
+	int len,
+	ZJH_ProgressCallback progressCallback,
+	void* userData)
+{
 	return EncodeToFile(path, len, NULL, progressCallback, userData);
 }
 
