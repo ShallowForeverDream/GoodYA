@@ -363,6 +363,7 @@ Huffman::Huffman()
 	m_progressStartTick = 0;
 	m_lastProgressPercent = -1;
 	m_lastProgressStage = -1;
+	codeBitLength = 0;
 }
 
 // 功能：析构 Huffman 对象并释放动态资源。
@@ -386,6 +387,7 @@ void Huffman::BeginProgressSession()
 	m_progressStartTick = ::GetTickCount();
 	m_lastProgressPercent = -1;
 	m_lastProgressStage = -1;
+	codeBitLength = 0;
 	ReportProgress(0, HUF_PROGRESS_STAGE_PREPARE, TRUE);
 }
 
@@ -477,7 +479,8 @@ void Huffman::ResetData()
 
 	n = 0;
 	text = "";
-	code = "";
+	codeBitsPacked = "";
+	codeBitLength = 0;
 	m_hasPassword = FALSE;
 	m_storedCrc32 = 0;
 }
@@ -485,8 +488,9 @@ void Huffman::ResetData()
 // 功能：根据字符编码表把原文 text 编码为 code。
 void Huffman::Encode()
 {
-	// 按字符逐个查表并拼接 Huffman 编码串。
-	code = "";
+	// 按字符逐个查表并直接写入按位打包缓冲，避免构造超大 "0/1" 字符串导致内存爆炸。
+	codeBitsPacked = "";
+	codeBitLength = 0;
 	if (n <= 0 || chars == NULL)
 	{
 		ReportProgress(85, HUF_PROGRESS_STAGE_ENCODE_DATA, TRUE);
@@ -495,17 +499,52 @@ void Huffman::Encode()
 
 	ReportProgress(69, HUF_PROGRESS_STAGE_ENCODE_DATA, TRUE);
 
+	const char* codeLookup[256];
+	int codeLenLookup[256];
+	int idx;
+	for (idx = 0; idx < 256; ++idx)
+	{
+		codeLookup[idx] = NULL;
+		codeLenLookup[idx] = 0;
+	}
+
+	for (idx = 1; idx <= n; ++idx)
+	{
+		if (chars[idx].code != NULL)
+		{
+			unsigned char ch = (unsigned char)chars[idx].c;
+			codeLookup[ch] = chars[idx].code;
+			codeLenLookup[ch] = (int)strlen(chars[idx].code);
+		}
+	}
+
+	if (!text.empty())
+		codeBitsPacked.reserve(text.size());
+
+	unsigned char current = 0;
+	int used = 0;
 	string::size_type i;
 	for (i = 0; i != text.size(); ++i)
 	{
-		int j;
-		for (j = 1; j <= n; ++j)
+		unsigned char ch = (unsigned char)text[i];
+		const char* symCode = codeLookup[ch];
+		int symLen = codeLenLookup[ch];
+		if (symCode != NULL && symLen > 0)
 		{
-			if (chars[j].c == text[i])
+			int k;
+			for (k = 0; k < symLen; ++k)
 			{
-				if (chars[j].code != NULL)
-					code += chars[j].code;
-				break;
+				current = (unsigned char)(current << 1);
+				if (symCode[k] == '1')
+					current = (unsigned char)(current + 1);
+				++used;
+				++codeBitLength;
+				if (used == 8)
+				{
+					codeBitsPacked += (char)current;
+					current = 0;
+					used = 0;
+				}
 			}
 		}
 
@@ -519,9 +558,15 @@ void Huffman::Encode()
 				(i + 1 == text.size()) ? TRUE : FALSE);
 		}
 	}
+
+	if (used != 0)
+	{
+		current = (unsigned char)(current << (8 - used));
+		codeBitsPacked += (char)current;
+	}
+
 	ReportProgress(85, HUF_PROGRESS_STAGE_ENCODE_DATA, TRUE);
 }
-
 // 功能：调试输出字符权重表。
 void Huffman::PrintCharWeight()
 {
@@ -629,8 +674,10 @@ void Huffman::select(int nNode, int &s1, int &s2)
 // 功能：调试打印当前压缩编码串。
 void Huffman::PrintCode()
 {
-	// 直接输出成员 code 内容。
-	AfxMessageBox(CString(code.c_str()));
+	// 直接输出当前编码位数（位流按字节打包后不再展示完整 0/1 串）。
+	CString msg;
+	msg.Format(_T("当前编码位数：%u"), codeBitLength);
+	AfxMessageBox(msg);
 }
 
 // 功能：调试打印当前原文文本。
@@ -794,7 +841,7 @@ BOOL Huffman::BuildPayload(string& payload)
 
 	ReportProgress(86, HUF_PROGRESS_STAGE_WRITE_FILE, TRUE);
 
-	int i, j;
+	int i;
 	AppendBytes(payload, &n, sizeof(int));
 	for (i = 1; i <= n; ++i)
 	{
@@ -816,42 +863,57 @@ BOOL Huffman::BuildPayload(string& payload)
 		}
 	}
 
-	int length = (int)code.length();
-	AppendBytes(payload, &length, sizeof(int));
+	unsigned int length = codeBitLength;
+	AppendBytes(payload, &length, sizeof(unsigned int));
 
-	int times = (length + 7) / 8;
-	int num = 0;
-	for (i = 0; i < times; ++i)
+	int bytesCount = (int)((length + 7U) / 8U);
+	if (bytesCount > 0)
 	{
-		unsigned char outByte = 0;
-		for (j = 0; j < 8; ++j)
-		{
-			outByte = (unsigned char)(outByte << 1);
-			if (num < length && code[num] == '1')
-				outByte = (unsigned char)(outByte + 1);
-			++num;
-		}
-		AppendBytes(payload, &outByte, sizeof(unsigned char));
+		if ((int)codeBitsPacked.size() < bytesCount)
+			return FALSE;
 
-		if (((i & 0x0FFF) == 0) || (i + 1 == times))
+		int offset = 0;
+		const int kChunk = 64 * 1024;
+		while (offset < bytesCount)
 		{
+			int nAppend = bytesCount - offset;
+			if (nAppend > kChunk)
+				nAppend = kChunk;
+			AppendBytes(payload, codeBitsPacked.c_str() + offset, nAppend);
+			offset += nAppend;
+
 			ReportStageProgress(HUF_PROGRESS_STAGE_WRITE_FILE,
-				(unsigned __int64)(i + 1),
-				(unsigned __int64)(times > 0 ? times : 1),
+				(unsigned __int64)offset,
+				(unsigned __int64)bytesCount,
 				89,
 				92,
-				(i + 1 == times) ? TRUE : FALSE);
+				(offset == bytesCount) ? TRUE : FALSE);
 		}
 	}
+	else
+	{
+		ReportProgress(92, HUF_PROGRESS_STAGE_WRITE_FILE, TRUE);
+	}
+
+	// 释放编码中间缓冲，降低后续写盘阶段峰值内存。
+	string emptyCode;
+	codeBitsPacked.swap(emptyCode);
+	codeBitLength = 0;
 
 	ReportProgress(92, HUF_PROGRESS_STAGE_WRITE_FILE, TRUE);
 	return TRUE;
 }
-
 // 功能：保存压缩包文件，并附加密码摘要与 CRC 尾信息。
 BOOL Huffman::SaveCodeToFile(char *filename, const char* password, unsigned long sourceCrc32)
 {
 	// 构建负载后按需加密，再写入尾部校验元数据。
+	// 先释放原文缓存，避免大文件压缩时峰值内存过高。
+	if (!text.empty())
+	{
+		string emptyText;
+		text.swap(emptyText);
+	}
+
 	string payload;
 	if (!BuildPayload(payload))
 	{
@@ -860,29 +922,28 @@ BOOL Huffman::SaveCodeToFile(char *filename, const char* password, unsigned long
 	}
 
 	BOOL hasPassword = (password != NULL && password[0] != '\0');
-	string outPayload = payload;
 	if (hasPassword)
 	{
 		// 论文说明：加密阶段采用与解密完全对称的异或流，边处理边上报进度。
 		int passLen = (int)strlen(password);
 		unsigned long seed = 0x9E3779B9UL;
 		int i;
-		for (i = 0; i < (int)outPayload.size(); ++i)
+		for (i = 0; i < (int)payload.size(); ++i)
 		{
 			seed = seed * 1664525UL + 1013904223UL + (unsigned char)password[i % passLen];
 			unsigned char key = (unsigned char)(((seed >> 24) & 0xFF) ^
 				(unsigned char)password[(i * 7 + 3) % passLen] ^
 				(i & 0xFF));
-			outPayload[(size_t)i] = (char)(((unsigned char)outPayload[(size_t)i]) ^ key);
+			payload[(size_t)i] = (char)(((unsigned char)payload[(size_t)i]) ^ key);
 
-			if (((i & 0x3FFF) == 0) || (i + 1 == (int)outPayload.size()))
+			if (((i & 0x3FFF) == 0) || (i + 1 == (int)payload.size()))
 			{
 				ReportStageProgress(HUF_PROGRESS_STAGE_WRITE_FILE,
 					(unsigned __int64)(i + 1),
-					(unsigned __int64)(outPayload.empty() ? 1 : outPayload.size()),
+					(unsigned __int64)(payload.empty() ? 1 : payload.size()),
 					92,
 					94,
-					(i + 1 == (int)outPayload.size()) ? TRUE : FALSE);
+					(i + 1 == (int)payload.size()) ? TRUE : FALSE);
 			}
 		}
 	}
@@ -901,13 +962,13 @@ BOOL Huffman::SaveCodeToFile(char *filename, const char* password, unsigned long
 		return FALSE;
 	}
 
-	unsigned __int64 totalWrite = (unsigned __int64)outPayload.size() + (unsigned __int64)kTailSize;
+	unsigned __int64 totalWrite = (unsigned __int64)payload.size() + (unsigned __int64)kTailSize;
 	unsigned __int64 written = 0;
 
-	if (!outPayload.empty())
+	if (!payload.empty())
 	{
-		const unsigned char* p = (const unsigned char*)outPayload.data();
-		int remain = (int)outPayload.size();
+		const unsigned char* p = (const unsigned char*)payload.data();
+		int remain = (int)payload.size();
 		const int kChunk = 64 * 1024;
 		while (remain > 0)
 		{
@@ -966,7 +1027,6 @@ BOOL Huffman::SaveCodeToFile(char *filename, const char* password, unsigned long
 	ReportProgress(100, HUF_PROGRESS_STAGE_DONE, TRUE);
 	return TRUE;
 }
-
 // 功能：预读取压缩包尾部元信息。
 BOOL Huffman::GetPackageInfo(char *filename, BOOL* hasPassword, unsigned long* storedCrc32, char md5HexOut[33])
 {
@@ -1072,33 +1132,21 @@ BOOL Huffman::ParsePayload(const unsigned char* payload, int payloadSize)
 		chars[i].code[codeLen] = '\0';
 	}
 
-	int bitLen = 0;
-	if (!ReadBytes(p, remain, &bitLen, sizeof(int)))
-		return FALSE;
-	if (bitLen < 0)
+	unsigned int bitLen = 0;
+	if (!ReadBytes(p, remain, &bitLen, sizeof(unsigned int)))
 		return FALSE;
 
-	int bytesCount = (bitLen + 7) / 8;
+	int bytesCount = (int)((bitLen + 7U) / 8U);
 	if (bytesCount > remain)
 		return FALSE;
 
-	code = "";
-	code.reserve(bitLen);
-
-	for (i = 0; i < bytesCount; ++i)
+	codeBitLength = bitLen;
+	codeBitsPacked = "";
+	if (bytesCount > 0)
 	{
-		unsigned char inByte = 0;
-		if (!ReadBytes(p, remain, &inByte, sizeof(unsigned char)))
-			return FALSE;
-
-		int j;
-		for (j = 0; j < 8 && (int)code.length() < bitLen; ++j)
-		{
-			if (((inByte >> (7 - j)) & 1) != 0)
-				code += '1';
-			else
-				code += '0';
-		}
+		codeBitsPacked.assign((const char*)p, bytesCount);
+		p += bytesCount;
+		remain -= bytesCount;
 	}
 
 	return TRUE;
@@ -1202,34 +1250,94 @@ BOOL Huffman::ReadCodeFromFile(char *filename, const char* password)
 // 功能：将 code 按 Huffman 树解码回原文 text。
 void Huffman::Decode()
 {
-	// 从根节点按位遍历到叶子节点后输出对应字符。
+	// 从按位打包缓冲解码回原文，避免先展开成超大 "0/1" 字符串。
 	text = "";
-	if (n <= 0 || chars == NULL || code.empty())
+	if (n <= 0 || chars == NULL || codeBitLength == 0 || codeBitsPacked.empty())
 		return;
 
-	string::size_type i = 0;
-	while (i < code.size())
+	int maxNodes = 1;
+	int i;
+	for (i = 1; i <= n; ++i)
 	{
-		BOOL matched = FALSE;
-		int j;
-		for (j = 1; j <= n; ++j)
-		{
-			int codeLen = (chars[j].code == NULL) ? 0 : (int)strlen(chars[j].code);
-			if (codeLen <= 0)
-				continue;
-			if (i + codeLen <= code.size() && code.compare(i, codeLen, chars[j].code) == 0)
-			{
-				text += chars[j].c;
-				i += codeLen;
-				matched = TRUE;
-				break;
-			}
-		}
-		if (!matched)
-			break;
+		if (chars[i].code != NULL)
+			maxNodes += (int)strlen(chars[i].code);
 	}
-}
+	if (maxNodes <= 1)
+		return;
 
+	struct DecodeNode
+	{
+		int next0;
+		int next1;
+		int symbolIndex;
+	};
+
+	DecodeNode* nodes = new DecodeNode[maxNodes + 1];
+	for (i = 0; i <= maxNodes; ++i)
+	{
+		nodes[i].next0 = 0;
+		nodes[i].next1 = 0;
+		nodes[i].symbolIndex = 0;
+	}
+
+	int nodeCount = 1;
+	for (i = 1; i <= n; ++i)
+	{
+		if (chars[i].code == NULL)
+			continue;
+		int cur = 1;
+		int k;
+		int codeLen = (int)strlen(chars[i].code);
+		for (k = 0; k < codeLen; ++k)
+		{
+			int bit = (chars[i].code[k] == '1') ? 1 : 0;
+			int next = (bit == 0) ? nodes[cur].next0 : nodes[cur].next1;
+			if (next == 0)
+			{
+				++nodeCount;
+				nodes[nodeCount].next0 = 0;
+				nodes[nodeCount].next1 = 0;
+				nodes[nodeCount].symbolIndex = 0;
+				if (bit == 0)
+					nodes[cur].next0 = nodeCount;
+				else
+					nodes[cur].next1 = nodeCount;
+				next = nodeCount;
+			}
+			cur = next;
+		}
+		nodes[cur].symbolIndex = i;
+	}
+
+	text.reserve((size_t)((codeBitLength + 7U) / 8U));
+	int cur = 1;
+	unsigned int bitPos;
+	for (bitPos = 0; bitPos < codeBitLength; ++bitPos)
+	{
+		unsigned int byteIndex = bitPos >> 3;
+		int bitInByte = 7 - (int)(bitPos & 7U);
+		unsigned char inByte = (unsigned char)codeBitsPacked[(size_t)byteIndex];
+		int bit = ((inByte >> bitInByte) & 1) ? 1 : 0;
+
+		int next = (bit == 0) ? nodes[cur].next0 : nodes[cur].next1;
+		if (next == 0)
+			break;
+		cur = next;
+
+		if (nodes[cur].symbolIndex > 0)
+		{
+			text += chars[nodes[cur].symbolIndex].c;
+			cur = 1;
+		}
+	}
+
+	delete[] nodes;
+
+	// 解码后不再需要编码位流，及时释放内存。
+	string emptyBits;
+	codeBitsPacked.swap(emptyBits);
+	codeBitLength = 0;
+}
 // 功能：统计原文字符频次并换算为权重。
 void Huffman::CountCharsWeight()
 {

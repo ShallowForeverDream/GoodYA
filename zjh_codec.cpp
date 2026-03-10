@@ -426,7 +426,7 @@ class EncoderWorker
 public:
 	// 核心入口：读取原文 -> 统计符号 -> 哈夫曼编码 -> 唯一可解调整 -> 输出 ENC2 负载。
 	EncoderWorker()
-		: len_(0), symbolLimit_(0), root_(NULL), originalBits_(0), progressCtx_(NULL)
+		: len_(0), symbolLimit_(0), root_(NULL), originalBits_(0), inputSymbolCount_(0), progressCtx_(NULL)
 	{
 	}
 
@@ -448,7 +448,8 @@ public:
 		freq_.assign((size_t)symbolLimit_, 0);
 		codes_.assign((size_t)symbolLimit_, std::string());
 		usedSymbols_.clear();
-		inputSymbols_.clear();
+		inputSymbolCount_ = 0;
+		inputPath_ = inputPath;
 		clearNodes();
 		root_ = NULL;
 		originalBits_ = 0;
@@ -458,7 +459,7 @@ public:
 		if (!readInput(inputPath))
 			return false;
 
-		if (!inputSymbols_.empty())
+		if (inputSymbolCount_ > 0)
 		{
 			// 非空输入时构建编码树与码表；空输入直接输出空负载结构。
 			ReportProgress(progressCtx_, 32, ZJH_PROGRESS_STAGE_BUILD_TREE, true);
@@ -551,7 +552,8 @@ private:
 	std::vector<int> freq_;
 	std::vector<std::string> codes_;
 	std::vector<int> usedSymbols_;
-	std::vector<int> inputSymbols_;
+	unsigned __int64 inputSymbolCount_;
+	std::string inputPath_;
 	std::vector<Node*> nodes_;
 	Node* root_;
 	unsigned __int64 originalBits_;
@@ -606,7 +608,7 @@ private:
 				if (currentLen == len_)
 				{
 					int symbol = (int)current;
-					inputSymbols_.push_back(symbol);
+					++inputSymbolCount_;
 					++freq_[(size_t)symbol];
 					current = 0;
 					currentLen = 0;
@@ -629,7 +631,7 @@ private:
 		{
 			current <<= (len_ - currentLen);
 			int symbol = (int)current;
-			inputSymbols_.push_back(symbol);
+			++inputSymbolCount_;
 			++freq_[(size_t)symbol];
 		}
 
@@ -640,6 +642,126 @@ private:
 		}
 		if (fileSize == 0)
 			ReportProgress(progressCtx_, 30, ZJH_PROGRESS_STAGE_READ_INPUT, true);
+		return true;
+	}
+
+	bool calcEncodedBitsByFreq(unsigned __int64& encodedBits)
+	{
+		encodedBits = 0;
+		for (size_t iUsed = 0; iUsed < usedSymbols_.size(); ++iUsed)
+		{
+			int symbol = usedSymbols_[iUsed];
+			const std::string& code = codes_[(size_t)symbol];
+			if (code.empty())
+				return false;
+			encodedBits += (unsigned __int64)freq_[(size_t)symbol] * (unsigned __int64)code.size();
+		}
+		return true;
+	}
+
+	bool encodeInputAppendToPayload(std::vector<unsigned char>& outPayload)
+	{
+		if (inputSymbolCount_ == 0)
+			return true;
+
+		std::ifstream fin(inputPath_.c_str(), std::ios::binary);
+		if (!fin)
+			return false;
+
+		fin.seekg(0, std::ios::end);
+		std::streamoff fileSize = fin.tellg();
+		if (fileSize < 0)
+			return false;
+		fin.seekg(0, std::ios::beg);
+
+		unsigned int current = 0;
+		int currentLen = 0;
+		char ch = 0;
+		unsigned __int64 bytesRead = 0;
+		unsigned __int64 symbolCount = 0;
+		unsigned char outCurrent = 0;
+		int outUsed = 0;
+
+		while (fin.get(ch))
+		{
+			unsigned char byte = (unsigned char)ch;
+			++bytesRead;
+			for (int bit = 7; bit >= 0; --bit)
+			{
+				current = (current << 1) | ((byte >> bit) & 1u);
+				++currentLen;
+				if (currentLen == len_)
+				{
+					int symbol = (int)current;
+					const std::string& code = codes_[(size_t)symbol];
+					if (code.empty())
+						return false;
+					for (size_t ci = 0; ci < code.size(); ++ci)
+					{
+						outCurrent = (unsigned char)((outCurrent << 1) | (code[ci] == '1' ? 1 : 0));
+						++outUsed;
+						if (outUsed == 8)
+						{
+							outPayload.push_back(outCurrent);
+							outCurrent = 0;
+							outUsed = 0;
+						}
+					}
+					++symbolCount;
+					current = 0;
+					currentLen = 0;
+				}
+			}
+
+			if (((bytesRead & 0x0FFF) == 0) || (bytesRead == (unsigned __int64)fileSize))
+			{
+				ReportStageProgress(progressCtx_,
+					ZJH_PROGRESS_STAGE_PACK_OUTPUT,
+					symbolCount,
+					(inputSymbolCount_ > 0) ? inputSymbolCount_ : 1,
+					74,
+					85,
+					(bytesRead == (unsigned __int64)fileSize));
+			}
+		}
+
+		if (currentLen > 0)
+		{
+			current <<= (len_ - currentLen);
+			int symbol = (int)current;
+			const std::string& code = codes_[(size_t)symbol];
+			if (code.empty())
+				return false;
+			for (size_t ci = 0; ci < code.size(); ++ci)
+			{
+				outCurrent = (unsigned char)((outCurrent << 1) | (code[ci] == '1' ? 1 : 0));
+				++outUsed;
+				if (outUsed == 8)
+				{
+					outPayload.push_back(outCurrent);
+					outCurrent = 0;
+					outUsed = 0;
+				}
+			}
+			++symbolCount;
+		}
+
+		if (symbolCount != inputSymbolCount_)
+			return false;
+
+		if (outUsed > 0)
+		{
+			outCurrent = (unsigned char)(outCurrent << (8 - outUsed));
+			outPayload.push_back(outCurrent);
+		}
+
+		ReportStageProgress(progressCtx_,
+			ZJH_PROGRESS_STAGE_PACK_OUTPUT,
+			symbolCount,
+			(inputSymbolCount_ > 0) ? inputSymbolCount_ : 1,
+			74,
+			85,
+			true);
 		return true;
 	}
 
@@ -1456,30 +1578,26 @@ private:
 		unsigned __int64 tableBits = tableWriter.bitCount;
 		tableWriter.flush();
 
-		BitWriter dataWriter;
-		for (size_t iData = 0; iData < inputSymbols_.size(); ++iData)
-		{
-			int symbol = inputSymbols_[iData];
-			const std::string& code = codes_[(size_t)symbol];
-			if (code.empty())
-				return false;
-			dataWriter.pushCode(code);
-			if (((iData & 0x3FF) == 0) || (iData + 1 == inputSymbols_.size()))
-			{
-				ReportStageProgress(progressCtx_,
-					ZJH_PROGRESS_STAGE_PACK_OUTPUT,
-					(unsigned __int64)(iData + 1),
-					(unsigned __int64)(inputSymbols_.empty() ? 1 : inputSymbols_.size()),
-					74,
-					85,
-					(iData + 1 == inputSymbols_.size()));
-			}
-		}
-		unsigned __int64 encodedBits = dataWriter.bitCount;
-		dataWriter.flush();
+		unsigned __int64 encodedBits = 0;
+		if (!calcEncodedBitsByFreq(encodedBits))
+			return false;
+		unsigned __int64 fixedHeadBytes =
+			(unsigned __int64)4 +
+			(unsigned __int64)1 +
+			(unsigned __int64)1 +
+			(unsigned __int64)2 +
+			(unsigned __int64)8 +
+			(unsigned __int64)8 +
+			(unsigned __int64)8 +
+			(unsigned __int64)8 +
+			(unsigned __int64)table.size() * (unsigned __int64)4;
+		unsigned __int64 dataBytes = BytesForBits(encodedBits);
+		unsigned __int64 totalBytes = fixedHeadBytes + (unsigned __int64)tableWriter.bytes.size() + dataBytes;
+		if (totalBytes > (unsigned __int64)(size_t)(-1))
+			return false;
 
 		outPayload.clear();
-		outPayload.reserve(64 + tableWriter.bytes.size() + dataWriter.bytes.size() + table.size() * 4);
+		outPayload.reserve((size_t)totalBytes);
 		outPayload.push_back((unsigned char)MAGIC_ENC2[0]);
 		outPayload.push_back((unsigned char)MAGIC_ENC2[1]);
 		outPayload.push_back((unsigned char)MAGIC_ENC2[2]);
@@ -1488,7 +1606,7 @@ private:
 		unsigned char lenU8 = (unsigned char)len_;
 		unsigned char reserved = 0;
 		unsigned short tableCnt = (unsigned short)table.size();
-		unsigned __int64 symbolCnt = (unsigned __int64)inputSymbols_.size();
+		unsigned __int64 symbolCnt = inputSymbolCount_;
 
 		AppendPod(outPayload, lenU8);
 		AppendPod(outPayload, reserved);
@@ -1507,8 +1625,12 @@ private:
 
 		if (!tableWriter.bytes.empty())
 			outPayload.insert(outPayload.end(), tableWriter.bytes.begin(), tableWriter.bytes.end());
-		if (!dataWriter.bytes.empty())
-			outPayload.insert(outPayload.end(), dataWriter.bytes.begin(), dataWriter.bytes.end());
+
+		size_t dataStart = outPayload.size();
+		if (!encodeInputAppendToPayload(outPayload))
+			return false;
+		if ((unsigned __int64)(outPayload.size() - dataStart) != dataBytes)
+			return false;
 
 		ReportProgress(progressCtx_, 85, ZJH_PROGRESS_STAGE_PACK_OUTPUT, true);
 
@@ -2067,7 +2189,8 @@ static bool EncodeToFile(const std::string& path,
 		ReportProgress(&progressCtx, 92, ZJH_PROGRESS_STAGE_ENCRYPT_PAYLOAD, true);
 	}
 
-	std::vector<unsigned char> fileData = payload;
+	std::vector<unsigned char> fileData;
+	fileData.swap(payload);
 	if (hasPassword)
 	{
 		unsigned char flag = 1;

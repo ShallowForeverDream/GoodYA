@@ -71,7 +71,8 @@ private:
 	CharMap chars;      // 字符映射表
 	int n;              // 不同字符数量
 	string text;        // 原文文本
-	string code;        // 压缩后比特串（以字符形式暂存）
+	string codeBitsPacked; // 压缩后比特流（按字节打包）
+	unsigned int codeBitLength; // 压缩后有效比特位长度
 
 	BOOL m_hasPassword;             // 当前读取包是否带密码校验信息
 	unsigned long m_storedCrc32;    // 压缩包中记录的原文 CRC32
