@@ -33,7 +33,7 @@ CComDlg::CComDlg(CWnd* pParent /*=NULL*/)
 	//{{AFX_DATA_INIT(CComDlg)
 	m_Extend = 0;
 	m_isDelete = FALSE;
-	m_isCheck = TRUE;
+	m_isCheck = FALSE;
 	m_isLock = FALSE;
 	//}}AFX_DATA_INIT
 	m_password = _T("");
@@ -425,19 +425,35 @@ void CComDlg::OnOk()
 		// 代码段功能：勾选测试选项时，重读压缩包并比对 CRC32。
 		if (m_isCheck)
 		{
-			Huffman verify;
-			if (!verify.ReadCodeFromFile(codePath, pEncryptPass))
+			try
 			{
+				Huffman verify;
+				if (!verify.ReadCodeFromFile(codePath, pEncryptPass))
+				{
+					SetCompressionUiEnabled(TRUE);
+					ShowMsgByACP(L"测试压缩文件失败，无法读取压缩包内容，校验失败！");
+					return;
+				}
+				verify.Decode();
+				unsigned long crcAfter = verify.GetTextCRC32();
+				if (crcAfter != crcBefore)
+				{
+					SetCompressionUiEnabled(TRUE);
+					ShowMsgByACP(L"CRC校验失败，压缩前后数据不一致！");
+					return;
+				}
+			}
+			catch (CMemoryException* e)
+			{
+				if (e != NULL) e->Delete();
 				SetCompressionUiEnabled(TRUE);
-				ShowMsgByACP(L"测试压缩文件失败，无法读取压缩包内容，校验失败！");
+				ShowMsgByACP(L"测试压缩文件失败：内存不足，已中止校验。");
 				return;
 			}
-			verify.Decode();
-			unsigned long crcAfter = verify.GetTextCRC32();
-			if (crcAfter != crcBefore)
+			catch (...)
 			{
 				SetCompressionUiEnabled(TRUE);
-				ShowMsgByACP(L"CRC校验失败，压缩前后数据不一致！");
+				ShowMsgByACP(L"测试压缩文件失败：校验过程中发生异常。");
 				return;
 			}
 		}
@@ -476,19 +492,35 @@ void CComDlg::OnOk()
 		// 代码段功能：勾选测试选项时，执行一次可解压校验（输出到临时文件并删除）。
 		if (m_isCheck)
 		{
-			char verifyOut[500] = {0};
-			strncpy(verifyOut, loadPath, sizeof(verifyOut) - 1);
-			verifyOut[sizeof(verifyOut) - 1] = '\0';
-			strcat(verifyOut, ".zjh.verify.tmp");
-
-			ZJH_decrypto verify;
-			if (!verify.decrypto_to(std::string(codePath), std::string(verifyOut), pEncryptPass))
+			try
 			{
+				char verifyOut[500] = {0};
+				strncpy(verifyOut, loadPath, sizeof(verifyOut) - 1);
+				verifyOut[sizeof(verifyOut) - 1] = '\0';
+				strcat(verifyOut, ".zjh.verify.tmp");
+
+				ZJH_decrypto verify;
+				if (!verify.decrypto_to(std::string(codePath), std::string(verifyOut), pEncryptPass))
+				{
+					SetCompressionUiEnabled(TRUE);
+					ShowMsgByACP(L"测试压缩文件失败，ZJH压缩包无法正确解压！");
+					return;
+				}
+				_unlink(verifyOut);
+			}
+			catch (CMemoryException* e)
+			{
+				if (e != NULL) e->Delete();
 				SetCompressionUiEnabled(TRUE);
-				ShowMsgByACP(L"测试压缩文件失败，ZJH压缩包无法正确解压！");
+				ShowMsgByACP(L"测试压缩文件失败：内存不足，已中止校验。");
 				return;
 			}
-			_unlink(verifyOut);
+			catch (...)
+			{
+				SetCompressionUiEnabled(TRUE);
+				ShowMsgByACP(L"测试压缩文件失败：校验过程中发生异常。");
+				return;
+			}
 		}
 
 		SetCompressionUiEnabled(TRUE);

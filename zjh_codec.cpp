@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 #include <cstring>
+#include <cstdio>
 
 namespace {
 
@@ -440,44 +441,20 @@ public:
 		std::vector<unsigned char>& outPayload,
 		ProgressContext* progressCtx)
 	{
-		// 初始化运行时状态。
-		progressCtx_ = progressCtx;
-		ReportProgress(progressCtx_, 0, ZJH_PROGRESS_STAGE_PREPARE, true);
-		len_ = len;
-		symbolLimit_ = (1 << len_);
-		freq_.assign((size_t)symbolLimit_, 0);
-		codes_.assign((size_t)symbolLimit_, std::string());
-		usedSymbols_.clear();
-		inputSymbolCount_ = 0;
-		inputPath_ = inputPath;
-		clearNodes();
-		root_ = NULL;
-		originalBits_ = 0;
-		codeTrie_.clear();
-		internalFollowingSymbols_.clear();
-
-		if (!readInput(inputPath))
+		if (!prepareRun(inputPath, len, progressCtx))
 			return false;
-
-		if (inputSymbolCount_ > 0)
-		{
-			// 非空输入时构建编码树与码表；空输入直接输出空负载结构。
-			ReportProgress(progressCtx_, 32, ZJH_PROGRESS_STAGE_BUILD_TREE, true);
-			buildHuffmanTree();
-			std::string pathBits;
-			assignCodesWithBuffer(root_, pathBits);
-			if (usedSymbols_.size() == 1)
-				codes_[(size_t)usedSymbols_[0]] = "0";
-			ReportProgress(progressCtx_, 45, ZJH_PROGRESS_STAGE_BUILD_TREE, true);
-			relaxTreeForUniqueDecode();
-		}
-		else
-		{
-			ReportProgress(progressCtx_, 45, ZJH_PROGRESS_STAGE_BUILD_TREE, true);
-			ReportProgress(progressCtx_, 65, ZJH_PROGRESS_STAGE_OPTIMIZE_CODE, true);
-		}
-
 		return writeOutputBytes(outPayload);
+	}
+
+	bool runToFile(const std::string& inputPath,
+		int len,
+		const std::string& outputPath,
+		const char* password,
+		ProgressContext* progressCtx)
+	{
+		if (!prepareRun(inputPath, len, progressCtx))
+			return false;
+		return writeOutputFile(outputPath, password);
 	}
 
 private:
@@ -513,6 +490,7 @@ private:
 		}
 	};
 
+
 	struct QueueInfoGreater
 	{
 		// std::priority_queue 默认大顶堆，这里自定义为“小频次优先”。
@@ -546,6 +524,34 @@ private:
 		}
 	};
 
+	struct StreamWriteState
+	{
+		std::ofstream fout;
+		std::vector<unsigned char> ioBuffer;
+		unsigned __int64 totalBytes;
+		unsigned __int64 writtenBytes;
+		unsigned __int64 payloadLogicalBytes;
+		bool encryptPayload;
+		const char* password;
+		int passLen;
+		unsigned long cryptSeed;
+		unsigned __int64 cryptIndex;
+		bool writeProgressEnabled;
+
+		StreamWriteState()
+			: totalBytes(0),
+			writtenBytes(0),
+			payloadLogicalBytes(0),
+			encryptPayload(false),
+			password(NULL),
+			passLen(0),
+			cryptSeed(0xA5C39E7DUL),
+			cryptIndex(0),
+			writeProgressEnabled(false)
+		{
+		}
+	};
+
 private:
 	int len_;
 	int symbolLimit_;
@@ -561,6 +567,8 @@ private:
 	std::vector<CodeTrieNode> codeTrie_;
 	std::vector< std::vector<int> > internalFollowingSymbols_;
 
+	
+
 	void clearNodes()
 	{
 		// 释放哈夫曼树节点，避免内存泄漏（VC6 无智能指针）。
@@ -575,6 +583,48 @@ private:
 		Node* n = new Node(symbol, left, right);
 		nodes_.push_back(n);
 		return n;
+	}
+
+	bool prepareRun(const std::string& inputPath,
+		int len,
+		ProgressContext* progressCtx)
+	{
+		progressCtx_ = progressCtx;
+		ReportProgress(progressCtx_, 0, ZJH_PROGRESS_STAGE_PREPARE, true);
+		len_ = len;
+		symbolLimit_ = (1 << len_);
+		freq_.assign((size_t)symbolLimit_, 0);
+		codes_.assign((size_t)symbolLimit_, std::string());
+		usedSymbols_.clear();
+		inputSymbolCount_ = 0;
+		inputPath_ = inputPath;
+		clearNodes();
+		root_ = NULL;
+		originalBits_ = 0;
+		codeTrie_.clear();
+		internalFollowingSymbols_.clear();
+
+		if (!readInput(inputPath))
+			return false;
+
+		if (inputSymbolCount_ > 0)
+		{
+			ReportProgress(progressCtx_, 32, ZJH_PROGRESS_STAGE_BUILD_TREE, true);
+			buildHuffmanTree();
+			std::string pathBits;
+			assignCodesWithBuffer(root_, pathBits);
+			if (usedSymbols_.size() == 1)
+				codes_[(size_t)usedSymbols_[0]] = "0";
+			ReportProgress(progressCtx_, 45, ZJH_PROGRESS_STAGE_BUILD_TREE, true);
+			relaxTreeForUniqueDecode();
+		}
+		else
+		{
+			ReportProgress(progressCtx_, 45, ZJH_PROGRESS_STAGE_BUILD_TREE, true);
+			ReportProgress(progressCtx_, 65, ZJH_PROGRESS_STAGE_OPTIMIZE_CODE, true);
+		}
+
+		return true;
 	}
 
 	bool readInput(const std::string& inputPath)
@@ -645,6 +695,7 @@ private:
 		return true;
 	}
 
+	
 	bool calcEncodedBitsByFreq(unsigned __int64& encodedBits)
 	{
 		encodedBits = 0;
@@ -656,6 +707,346 @@ private:
 				return false;
 			encodedBits += (unsigned __int64)freq_[(size_t)symbol] * (unsigned __int64)code.size();
 		}
+		return true;
+	}
+
+	bool flushStreamBuffer(StreamWriteState& sw, bool forceProgress)
+	{
+		if (!sw.ioBuffer.empty())
+		{
+			sw.fout.write((const char*)&sw.ioBuffer[0], (std::streamsize)sw.ioBuffer.size());
+			if (!sw.fout)
+				return false;
+			sw.writtenBytes += (unsigned __int64)sw.ioBuffer.size();
+			sw.ioBuffer.clear();
+		}
+
+		if (sw.writeProgressEnabled)
+		{
+			ReportStageProgress(progressCtx_,
+				ZJH_PROGRESS_STAGE_WRITE_FILE,
+				sw.writtenBytes,
+				sw.totalBytes,
+				92,
+				99,
+				forceProgress || (sw.writtenBytes == sw.totalBytes));
+		}
+		return true;
+	}
+
+	bool appendBytesToStream(StreamWriteState& sw,
+		const unsigned char* data,
+		size_t dataSize,
+		bool payloadBytes)
+	{
+		if (data == NULL || dataSize == 0)
+			return true;
+
+		const size_t IO_CHUNK = 64 * 1024;
+		for (size_t i = 0; i < dataSize; ++i)
+		{
+			unsigned char b = data[i];
+			if (payloadBytes)
+			{
+				++sw.payloadLogicalBytes;
+				if (sw.encryptPayload)
+				{
+					unsigned __int64 idx = sw.cryptIndex;
+					unsigned char p0 = (unsigned char)sw.password[(size_t)(idx % (unsigned __int64)sw.passLen)];
+					sw.cryptSeed = sw.cryptSeed * 1664525UL + 1013904223UL + p0;
+					unsigned char p1 = (unsigned char)sw.password[(size_t)(((idx * 7 + 3) % (unsigned __int64)sw.passLen))];
+					unsigned char key = (unsigned char)((((sw.cryptSeed >> 24) & 0xFF) ^ p1 ^ (unsigned char)(idx & 0xFF)));
+					b ^= key;
+					++sw.cryptIndex;
+				}
+			}
+
+			sw.ioBuffer.push_back(b);
+			if (sw.ioBuffer.size() >= IO_CHUNK)
+			{
+				if (!flushStreamBuffer(sw, false))
+					return false;
+			}
+		}
+		return true;
+	}
+
+	bool encodeInputWriteToStream(StreamWriteState& sw)
+	{
+		if (inputSymbolCount_ == 0)
+			return true;
+
+		std::ifstream fin(inputPath_.c_str(), std::ios::binary);
+		if (!fin)
+			return false;
+
+		fin.seekg(0, std::ios::end);
+		std::streamoff fileSize = fin.tellg();
+		if (fileSize < 0)
+			return false;
+		fin.seekg(0, std::ios::beg);
+
+		unsigned int current = 0;
+		int currentLen = 0;
+		char ch = 0;
+		unsigned __int64 bytesRead = 0;
+		unsigned __int64 symbolCount = 0;
+		unsigned char outCurrent = 0;
+		int outUsed = 0;
+		std::vector<unsigned char> chunk;
+		chunk.reserve(64 * 1024);
+
+		while (fin.get(ch))
+		{
+			unsigned char byte = (unsigned char)ch;
+			++bytesRead;
+			for (int bit = 7; bit >= 0; --bit)
+			{
+				current = (current << 1) | ((byte >> bit) & 1u);
+				++currentLen;
+				if (currentLen == len_)
+				{
+					int symbol = (int)current;
+					const std::string& code = codes_[(size_t)symbol];
+					if (code.empty())
+						return false;
+					for (size_t ci = 0; ci < code.size(); ++ci)
+					{
+						outCurrent = (unsigned char)((outCurrent << 1) | (code[ci] == '1' ? 1 : 0));
+						++outUsed;
+						if (outUsed == 8)
+						{
+							chunk.push_back(outCurrent);
+							outCurrent = 0;
+							outUsed = 0;
+							if (chunk.size() >= 64 * 1024)
+							{
+								if (!appendBytesToStream(sw, &chunk[0], chunk.size(), true))
+									return false;
+								chunk.clear();
+							}
+						}
+					}
+					++symbolCount;
+					current = 0;
+					currentLen = 0;
+				}
+			}
+
+			if (((bytesRead & 0x0FFF) == 0) || (bytesRead == (unsigned __int64)fileSize))
+			{
+				ReportStageProgress(progressCtx_,
+					ZJH_PROGRESS_STAGE_PACK_OUTPUT,
+					symbolCount,
+					(inputSymbolCount_ > 0) ? inputSymbolCount_ : 1,
+					74,
+					85,
+					(bytesRead == (unsigned __int64)fileSize));
+			}
+		}
+
+		if (currentLen > 0)
+		{
+			current <<= (len_ - currentLen);
+			int symbol = (int)current;
+			const std::string& code = codes_[(size_t)symbol];
+			if (code.empty())
+				return false;
+			for (size_t ci = 0; ci < code.size(); ++ci)
+			{
+				outCurrent = (unsigned char)((outCurrent << 1) | (code[ci] == '1' ? 1 : 0));
+				++outUsed;
+				if (outUsed == 8)
+				{
+					chunk.push_back(outCurrent);
+					outCurrent = 0;
+					outUsed = 0;
+					if (chunk.size() >= 64 * 1024)
+					{
+						if (!appendBytesToStream(sw, &chunk[0], chunk.size(), true))
+							return false;
+						chunk.clear();
+					}
+				}
+			}
+			++symbolCount;
+		}
+
+		if (symbolCount != inputSymbolCount_)
+			return false;
+
+		if (outUsed > 0)
+		{
+			outCurrent = (unsigned char)(outCurrent << (8 - outUsed));
+			chunk.push_back(outCurrent);
+		}
+
+		if (!chunk.empty())
+		{
+			if (!appendBytesToStream(sw, &chunk[0], chunk.size(), true))
+				return false;
+		}
+
+		ReportStageProgress(progressCtx_,
+			ZJH_PROGRESS_STAGE_PACK_OUTPUT,
+			symbolCount,
+			(inputSymbolCount_ > 0) ? inputSymbolCount_ : 1,
+			74,
+			85,
+			true);
+		return true;
+	}
+
+	bool writeOutputFile(const std::string& outputPath, const char* password)
+	{
+		std::vector<EncTableEntry> table;
+		table.reserve(usedSymbols_.size());
+		for (size_t iUsed = 0; iUsed < usedSymbols_.size(); ++iUsed)
+		{
+			int symbol = usedSymbols_[iUsed];
+			const std::string& code = codes_[(size_t)symbol];
+			if (!code.empty())
+			{
+				EncTableEntry t;
+				t.symbol = (unsigned short)symbol;
+				t.code = code;
+				table.push_back(t);
+			}
+		}
+		ReportProgress(progressCtx_, 68, ZJH_PROGRESS_STAGE_PACK_OUTPUT, true);
+
+		BitWriter tableWriter;
+		for (size_t iTbl = 0; iTbl < table.size(); ++iTbl)
+		{
+			tableWriter.pushCode(table[iTbl].code);
+			if (((iTbl & 0x3F) == 0) || (iTbl + 1 == table.size()))
+			{
+				ReportStageProgress(progressCtx_,
+					ZJH_PROGRESS_STAGE_PACK_OUTPUT,
+					(unsigned __int64)(iTbl + 1),
+					(unsigned __int64)(table.empty() ? 1 : table.size()),
+					68,
+					74,
+					(iTbl + 1 == table.size()));
+			}
+		}
+		unsigned __int64 tableBits = tableWriter.bitCount;
+		tableWriter.flush();
+
+		unsigned __int64 encodedBits = 0;
+		if (!calcEncodedBitsByFreq(encodedBits))
+			return false;
+
+		unsigned __int64 fixedHeadBytes =
+			(unsigned __int64)4 +
+			(unsigned __int64)1 +
+			(unsigned __int64)1 +
+			(unsigned __int64)2 +
+			(unsigned __int64)8 +
+			(unsigned __int64)8 +
+			(unsigned __int64)8 +
+			(unsigned __int64)8 +
+			(unsigned __int64)table.size() * (unsigned __int64)4;
+		unsigned __int64 dataBytes = BytesForBits(encodedBits);
+		unsigned __int64 payloadBytes = fixedHeadBytes + (unsigned __int64)tableWriter.bytes.size() + dataBytes;
+		bool hasPassword = (password != NULL && password[0] != '\0');
+		unsigned __int64 fileBytes = payloadBytes + (hasPassword ? (unsigned __int64)TAIL_SIZE : 0);
+
+		StreamWriteState sw;
+		sw.totalBytes = fileBytes;
+		sw.encryptPayload = hasPassword;
+		sw.password = password;
+		sw.passLen = hasPassword ? (int)strlen(password) : 0;
+		sw.ioBuffer.reserve(64 * 1024);
+		sw.fout.open(outputPath.c_str(), std::ios::binary | std::ios::trunc);
+		if (!sw.fout)
+			return false;
+
+
+		std::vector<unsigned char> headerBytes;
+		headerBytes.reserve((size_t)fixedHeadBytes);
+		headerBytes.push_back((unsigned char)MAGIC_ENC2[0]);
+		headerBytes.push_back((unsigned char)MAGIC_ENC2[1]);
+		headerBytes.push_back((unsigned char)MAGIC_ENC2[2]);
+		headerBytes.push_back((unsigned char)MAGIC_ENC2[3]);
+
+		unsigned char lenU8 = (unsigned char)len_;
+		unsigned char reserved = 0;
+		unsigned short tableCnt = (unsigned short)table.size();
+		unsigned __int64 symbolCnt = inputSymbolCount_;
+
+		AppendPod(headerBytes, lenU8);
+		AppendPod(headerBytes, reserved);
+		AppendPod(headerBytes, tableCnt);
+		AppendPod(headerBytes, symbolCnt);
+		AppendPod(headerBytes, originalBits_);
+		AppendPod(headerBytes, tableBits);
+		AppendPod(headerBytes, encodedBits);
+		for (size_t iMeta = 0; iMeta < table.size(); ++iMeta)
+		{
+			unsigned short codeLen = (unsigned short)table[iMeta].code.size();
+			AppendPod(headerBytes, table[iMeta].symbol);
+			AppendPod(headerBytes, codeLen);
+		}
+
+		if (!headerBytes.empty())
+		{
+			if (!appendBytesToStream(sw, &headerBytes[0], headerBytes.size(), true))
+				return false;
+		}
+		if (!tableWriter.bytes.empty())
+		{
+			if (!appendBytesToStream(sw, &tableWriter.bytes[0], tableWriter.bytes.size(), true))
+				return false;
+		}
+
+		if (!encodeInputWriteToStream(sw))
+			return false;
+		if (inputSymbolCount_ == 0)
+			ReportProgress(progressCtx_, 85, ZJH_PROGRESS_STAGE_PACK_OUTPUT, true);
+
+		if (sw.payloadLogicalBytes != payloadBytes)
+			return false;
+
+		if (!flushStreamBuffer(sw, false))
+			return false;
+
+		if (hasPassword)
+		{
+			ReportProgress(progressCtx_, 86, ZJH_PROGRESS_STAGE_ENCRYPT_PAYLOAD, true);
+			ReportProgress(progressCtx_, 92, ZJH_PROGRESS_STAGE_ENCRYPT_PAYLOAD, true);
+		}
+		else
+		{
+			ReportProgress(progressCtx_, 92, ZJH_PROGRESS_STAGE_ENCRYPT_PAYLOAD, true);
+		}
+
+		sw.writeProgressEnabled = true;
+		ReportStageProgress(progressCtx_,
+			ZJH_PROGRESS_STAGE_WRITE_FILE,
+			sw.writtenBytes,
+			sw.totalBytes,
+			92,
+			99,
+			false);
+
+		if (hasPassword)
+		{
+			unsigned char tail[TAIL_SIZE];
+			for (int ti = 0; ti < TAIL_MAGIC_LEN; ++ti)
+				tail[ti] = (unsigned char)TAIL_MAGIC[ti];
+			tail[TAIL_MAGIC_LEN] = 1;
+			unsigned long hash = PasswordHash32(password);
+			memcpy(tail + TAIL_MAGIC_LEN + 1, &hash, 4);
+			if (!appendBytesToStream(sw, tail, (size_t)TAIL_SIZE, false))
+				return false;
+		}
+
+		if (!flushStreamBuffer(sw, true))
+			return false;
+		if (sw.writtenBytes != sw.totalBytes)
+			return false;
+
 		return true;
 	}
 
@@ -2165,96 +2556,1035 @@ static bool EncodeToFile(const std::string& path,
 	ZJH_ProgressCallback progressCallback,
 	void* userData)
 {
-	// 压缩总入口：
-	// 1) 生成 ENC2 负载；
-	// 2) 若启用密码则混淆负载；
-	// 3) 追加密码尾标记并写成 .zjh 文件。
+	// 压缩总入口（流式写盘版）：
+	// 1) 双遍读取统计 + 编码；
+	// 2) 直接写出 .zjh，避免整包驻留内存；
+	// 3) 若有密码则对 payload 字节流在线异或后再写尾标记。
+	if (len <= 0 || len > MAX_LEN)
+		return false;
+
 	ProgressContext progressCtx(progressCallback, userData);
-	std::vector<unsigned char> payload;
-	if (!EncodeEnc2Payload(path, len, payload, &progressCtx))
+	EncoderWorker worker;
+	if (!worker.runToFile(path, len, path + ".zjh", password, &progressCtx))
 		return false;
-
-	bool hasPassword = (password != NULL && password[0] != '\0');
-	if (hasPassword)
-	{
-		XorCryptPayload(payload,
-			password,
-			&progressCtx,
-			ZJH_PROGRESS_STAGE_ENCRYPT_PAYLOAD,
-			86,
-			92);
-	}
-	else
-	{
-		ReportProgress(&progressCtx, 92, ZJH_PROGRESS_STAGE_ENCRYPT_PAYLOAD, true);
-	}
-
-	std::vector<unsigned char> fileData;
-	fileData.swap(payload);
-	if (hasPassword)
-	{
-		unsigned char flag = 1;
-		unsigned long hash = PasswordHash32(password);
-		for (int ti = 0; ti < TAIL_MAGIC_LEN; ++ti)
-			fileData.push_back((unsigned char)TAIL_MAGIC[ti]);
-		fileData.push_back(flag);
-		size_t oldSize = fileData.size();
-		fileData.resize(oldSize + 4);
-		memcpy(&fileData[oldSize], &hash, 4);
-	}
-
-	if (!WriteAllBytesWithProgress(path + ".zjh",
-		fileData,
-		&progressCtx,
-		ZJH_PROGRESS_STAGE_WRITE_FILE,
-		92,
-		99))
-	{
-		return false;
-	}
 
 	ReportProgress(&progressCtx, 100, ZJH_PROGRESS_STAGE_DONE, true);
 	return true;
 }
+
 
+template <typename T>
+static bool ReadPodFromStream(std::istream& in, T& value)
+{
+	in.read((char*)&value, (std::streamsize)sizeof(T));
+	return in.good();
+}
+
+static void RemoveFileNoThrow(const std::string& path)
+{
+	if (!path.empty())
+		::remove(path.c_str());
+}
+
+struct PrefixCheckNode
+{
+	int next0;
+	int next1;
+	int terminal;
+	PrefixCheckNode() : next0(-1), next1(-1), terminal(0) {}
+};
+
+struct PrefixDecodeNode
+{
+	int next0;
+	int next1;
+	int symbol;
+	PrefixDecodeNode() : next0(-1), next1(-1), symbol(-1) {}
+};
+static bool IsPrefixFree(const std::vector<DecTableEntry>& table)
+{
+	std::vector<PrefixCheckNode> nodes;
+	nodes.push_back(PrefixCheckNode());
+
+	for (size_t i = 0; i < table.size(); ++i)
+	{
+		const std::string& code = table[i].code;
+		if (code.empty())
+			return false;
+
+		int node = 0;
+		for (size_t j = 0; j < code.size(); ++j)
+		{
+			if (nodes[(size_t)node].terminal)
+				return false;
+
+			int bit = (code[j] == '1') ? 1 : 0;
+			int nextRef = (bit == 0) ? nodes[(size_t)node].next0 : nodes[(size_t)node].next1;
+			if (nextRef == -1)
+			{
+				nextRef = (int)nodes.size();
+				if (bit == 0)
+					nodes[(size_t)node].next0 = nextRef;
+				else
+					nodes[(size_t)node].next1 = nextRef;
+				nodes.push_back(PrefixCheckNode());
+			}
+			node = nextRef;
+		}
+
+		if (nodes[(size_t)node].terminal)
+			return false;
+		if (nodes[(size_t)node].next0 != -1 || nodes[(size_t)node].next1 != -1)
+			return false;
+		nodes[(size_t)node].terminal = 1;
+	}
+
+	return true;
+}
+
+struct OutputByteWriter
+{
+	std::ofstream fout;
+	std::vector<unsigned char> buffer;
+	unsigned __int64 originalBits;
+	unsigned __int64 producedBits;
+	unsigned char current;
+	int used;
+
+	OutputByteWriter()
+		: originalBits(0), producedBits(0), current(0), used(0)
+	{
+	}
+
+	bool open(const std::string& path, unsigned __int64 bits)
+	{
+		originalBits = bits;
+		producedBits = 0;
+		current = 0;
+		used = 0;
+		buffer.clear();
+		buffer.reserve(64 * 1024);
+		fout.open(path.c_str(), std::ios::binary | std::ios::trunc);
+		return fout.good();
+	}
+
+	bool flushBuffer()
+	{
+		if (buffer.empty())
+			return true;
+		fout.write((const char*)&buffer[0], (std::streamsize)buffer.size());
+		if (!fout)
+			return false;
+		buffer.clear();
+		return true;
+	}
+
+	bool pushByte(unsigned char b)
+	{
+		buffer.push_back(b);
+		if (buffer.size() >= (64 * 1024))
+			return flushBuffer();
+		return true;
+	}
+
+	bool pushSymbol(unsigned short symbol, int len)
+	{
+		for (int b = len - 1; b >= 0; --b)
+		{
+			if (producedBits >= originalBits)
+				break;
+			int bit = (symbol >> b) & 1;
+			current = (unsigned char)((current << 1) | (bit & 1));
+			++used;
+			++producedBits;
+			if (used == 8)
+			{
+				if (!pushByte(current))
+					return false;
+				current = 0;
+				used = 0;
+			}
+		}
+		return true;
+	}
+
+	bool finish()
+	{
+		if (producedBits != originalBits)
+			return false;
+		if (used != 0)
+		{
+			current = (unsigned char)(current << (8 - used));
+			if (!pushByte(current))
+				return false;
+			current = 0;
+			used = 0;
+		}
+		return flushBuffer();
+	}
+};
+
+static int GetBitFromChunkBuffer(const std::vector<unsigned char>& bytes,
+	int firstBitOffset,
+	unsigned __int64 chunkBitIndex)
+{
+	unsigned __int64 all = (unsigned __int64)firstBitOffset + chunkBitIndex;
+	size_t byteIndex = (size_t)(all >> 3);
+	int bitInByte = 7 - (int)(all & 7);
+	return (bytes[byteIndex] >> bitInByte) & 1;
+}
+
+static bool ReadBitChunkFromFile(std::ifstream& fin,
+	unsigned __int64 dataByteOffset,
+	unsigned __int64 bitStart,
+	unsigned __int64 bitCount,
+	std::vector<unsigned char>& outBytes,
+	int& firstBitOffset)
+{
+	firstBitOffset = (int)(bitStart & 7);
+	unsigned __int64 startByte = dataByteOffset + (bitStart >> 3);
+	unsigned __int64 needBits = (unsigned __int64)firstBitOffset + bitCount;
+	unsigned __int64 needBytes64 = BytesForBits(needBits);
+	size_t needBytes = (size_t)needBytes64;
+	if ((unsigned __int64)needBytes != needBytes64)
+		return false;
+
+	outBytes.resize(needBytes);
+	if (needBytes == 0)
+		return true;
+
+	fin.clear();
+	fin.seekg((std::streamoff)startByte, std::ios::beg);
+	if (!fin)
+		return false;
+	fin.read((char*)&outBytes[0], (std::streamsize)needBytes);
+	if (fin.gcount() != (std::streamsize)needBytes)
+		return false;
+	return true;
+}
+
+static bool DecodePrefixDataToFile(const std::string& payloadPath,
+	unsigned __int64 dataByteOffset,
+	unsigned __int64 encodedBits,
+	unsigned __int64 symbolCnt,
+	int len,
+	unsigned __int64 originalBits,
+	const std::vector<DecTableEntry>& table,
+	const std::string& outputPath)
+{
+	std::vector<PrefixDecodeNode> trie;
+	trie.push_back(PrefixDecodeNode());
+
+	for (size_t i = 0; i < table.size(); ++i)
+	{
+		const std::string& code = table[i].code;
+		if (code.empty())
+			return false;
+
+		int node = 0;
+		for (size_t j = 0; j < code.size(); ++j)
+		{
+			if (trie[(size_t)node].symbol >= 0)
+				return false;
+			int bit = (code[j] == '1') ? 1 : 0;
+			int nextRef = (bit == 0) ? trie[(size_t)node].next0 : trie[(size_t)node].next1;
+			if (nextRef == -1)
+			{
+				nextRef = (int)trie.size();
+				if (bit == 0)
+					trie[(size_t)node].next0 = nextRef;
+				else
+					trie[(size_t)node].next1 = nextRef;
+				trie.push_back(PrefixDecodeNode());
+			}
+			node = nextRef;
+		}
+
+		if (trie[(size_t)node].symbol >= 0)
+			return false;
+		if (trie[(size_t)node].next0 != -1 || trie[(size_t)node].next1 != -1)
+			return false;
+		trie[(size_t)node].symbol = (int)table[i].symbol;
+	}
+
+	std::ifstream fin(payloadPath.c_str(), std::ios::binary);
+	if (!fin)
+		return false;
+
+	OutputByteWriter writer;
+	if (!writer.open(outputPath, originalBits))
+		return false;
+
+	const unsigned __int64 CHUNK_BITS = (unsigned __int64)(1 << 20);
+	std::vector<unsigned char> bitsChunk;
+	unsigned __int64 decodedSymbols = 0;
+	int node = 0;
+
+	for (unsigned __int64 chunkStart = 0; chunkStart < encodedBits; chunkStart += CHUNK_BITS)
+	{
+		unsigned __int64 bitsThis = CHUNK_BITS;
+		if (chunkStart + bitsThis > encodedBits)
+			bitsThis = encodedBits - chunkStart;
+
+		int firstBitOffset = 0;
+		if (!ReadBitChunkFromFile(fin, dataByteOffset, chunkStart, bitsThis, bitsChunk, firstBitOffset))
+			return false;
+
+		for (unsigned __int64 i = 0; i < bitsThis; ++i)
+		{
+			int bit = GetBitFromChunkBuffer(bitsChunk, firstBitOffset, i);
+			int nextRef = (bit == 0) ? trie[(size_t)node].next0 : trie[(size_t)node].next1;
+			if (nextRef < 0)
+				return false;
+			node = nextRef;
+			if (trie[(size_t)node].symbol >= 0)
+			{
+				if (!writer.pushSymbol((unsigned short)trie[(size_t)node].symbol, len))
+					return false;
+				++decodedSymbols;
+				if (decodedSymbols > symbolCnt)
+					return false;
+				node = 0;
+			}
+		}
+	}
+
+	if (decodedSymbols != symbolCnt)
+		return false;
+	if (node != 0)
+		return false;
+	return writer.finish();
+}
+
+struct DpCheckpointHeader
+{
+	unsigned __int64 startBit;
+	int acState;
+};
+
+static bool SaveDpCheckpoint(std::ofstream& out,
+	std::vector<unsigned __int64>& offsets,
+	unsigned __int64 startBit,
+	int acState,
+	const std::vector<unsigned char>& waysRing,
+	int maxCodeLen)
+{
+	unsigned __int64 off = (unsigned __int64)out.tellp();
+	offsets.push_back(off);
+
+	DpCheckpointHeader header;
+	header.startBit = startBit;
+	header.acState = acState;
+	out.write((const char*)&header, (std::streamsize)sizeof(header));
+	if (!out)
+		return false;
+
+	size_t windowSize = (size_t)maxCodeLen + 1;
+	std::vector<unsigned char> snap(windowSize, 0);
+	for (int j = 0; j <= maxCodeLen; ++j)
+	{
+		signed __int64 absPos = (signed __int64)startBit - (signed __int64)maxCodeLen + (signed __int64)j;
+		if (absPos >= 0)
+			snap[(size_t)j] = waysRing[(size_t)(((unsigned __int64)absPos) % windowSize)];
+	}
+	if (!snap.empty())
+		out.write((const char*)&snap[0], (std::streamsize)snap.size());
+	return out.good();
+}
+
+static bool LoadDpCheckpoint(std::ifstream& in,
+	unsigned __int64 offset,
+	int maxCodeLen,
+	DpCheckpointHeader& header,
+	std::vector<unsigned char>& snap)
+{
+	in.clear();
+	in.seekg((std::streamoff)offset, std::ios::beg);
+	if (!in)
+		return false;
+	in.read((char*)&header, (std::streamsize)sizeof(header));
+	if (!in)
+		return false;
+
+	size_t windowSize = (size_t)maxCodeLen + 1;
+	snap.resize(windowSize);
+	if (!snap.empty())
+	{
+		in.read((char*)&snap[0], (std::streamsize)snap.size());
+		if (!in)
+			return false;
+	}
+	return true;
+}
+
+static bool DecodeNonPrefixDataToFile(const std::string& payloadPath,
+	unsigned __int64 dataByteOffset,
+	unsigned __int64 encodedBits,
+	unsigned __int64 symbolCnt,
+	int len,
+	unsigned __int64 originalBits,
+	const std::vector<DecTableEntry>& table,
+	const std::string& outputPath,
+	const std::string& checkpointPath,
+	const std::string& symRevPath)
+{
+	std::vector<DecodeACNode> acNodes;
+	if (!BuildDecodeAutomaton(table, acNodes))
+		return false;
+
+	int maxCodeLen = 0;
+	for (size_t i = 0; i < table.size(); ++i)
+	{
+		int clen = (int)table[i].code.size();
+		if (clen > maxCodeLen)
+			maxCodeLen = clen;
+	}
+	if (maxCodeLen <= 0 || maxCodeLen > 65535)
+		return false;
+
+	size_t windowSize = (size_t)maxCodeLen + 1;
+	std::vector<unsigned char> waysRing(windowSize, 0);
+	waysRing[0] = 1;
+	int state = 0;
+
+	const unsigned __int64 CHUNK_BITS = (unsigned __int64)(1 << 20);
+	std::vector<unsigned __int64> checkpointOffsets;
+	std::vector<unsigned char> bitsChunk;
+
+	std::ofstream ckOut(checkpointPath.c_str(), std::ios::binary | std::ios::trunc);
+	if (!ckOut)
+		return false;
+	if (!SaveDpCheckpoint(ckOut, checkpointOffsets, 0, state, waysRing, maxCodeLen))
+		return false;
+
+	std::ifstream fin(payloadPath.c_str(), std::ios::binary);
+	if (!fin)
+		return false;
+
+	for (unsigned __int64 chunkStart = 0; chunkStart < encodedBits; chunkStart += CHUNK_BITS)
+	{
+		unsigned __int64 bitsThis = CHUNK_BITS;
+		if (chunkStart + bitsThis > encodedBits)
+			bitsThis = encodedBits - chunkStart;
+
+		int firstBitOffset = 0;
+		if (!ReadBitChunkFromFile(fin, dataByteOffset, chunkStart, bitsThis, bitsChunk, firstBitOffset))
+			return false;
+
+		for (unsigned __int64 i = 0; i < bitsThis; ++i)
+		{
+			unsigned __int64 pos = chunkStart + i + 1;
+			int bit = GetBitFromChunkBuffer(bitsChunk, firstBitOffset, i);
+			state = (bit == 0) ? acNodes[(size_t)state].next0 : acNodes[(size_t)state].next1;
+
+			unsigned char waysHere = 0;
+			const std::vector<DecodeOutput>& outs = acNodes[(size_t)state].outs;
+			for (size_t oi = 0; oi < outs.size(); ++oi)
+			{
+				unsigned short length = outs[oi].length;
+				if (length == 0 || (unsigned __int64)length > pos)
+					continue;
+				unsigned __int64 fromPos = pos - (unsigned __int64)length;
+				unsigned char fromWays = waysRing[(size_t)(fromPos % windowSize)];
+				if (fromWays == 0)
+					continue;
+				int sum = (int)waysHere + (int)fromWays;
+				if (sum > 2) sum = 2;
+				waysHere = (unsigned char)sum;
+			}
+			waysRing[(size_t)(pos % windowSize)] = waysHere;
+		}
+
+		unsigned __int64 nextStart = chunkStart + bitsThis;
+		if (nextStart < encodedBits)
+		{
+			if (!SaveDpCheckpoint(ckOut, checkpointOffsets, nextStart, state, waysRing, maxCodeLen))
+				return false;
+		}
+	}
+	ckOut.close();
+
+	if (waysRing[(size_t)(encodedBits % windowSize)] != 1)
+		return false;
+
+	std::ifstream ckIn(checkpointPath.c_str(), std::ios::binary);
+	if (!ckIn)
+		return false;
+	std::ofstream symOut(symRevPath.c_str(), std::ios::binary | std::ios::trunc);
+	if (!symOut)
+		return false;
+
+	unsigned __int64 currentPos = encodedBits;
+	unsigned __int64 decodedSymbols = 0;
+	std::vector<unsigned char> snap;
+
+	while (currentPos > 0)
+	{
+		unsigned __int64 chunkIndex = (currentPos - 1) / CHUNK_BITS;
+		unsigned __int64 chunkStart = chunkIndex * CHUNK_BITS;
+		unsigned __int64 chunkEnd = chunkStart + CHUNK_BITS;
+		if (chunkEnd > encodedBits)
+			chunkEnd = encodedBits;
+		unsigned __int64 bitsThis64 = chunkEnd - chunkStart;
+		size_t bitsThis = (size_t)bitsThis64;
+		if ((unsigned __int64)bitsThis != bitsThis64)
+			return false;
+
+		if (chunkIndex >= checkpointOffsets.size())
+			return false;
+
+		DpCheckpointHeader header;
+		if (!LoadDpCheckpoint(ckIn, checkpointOffsets[(size_t)chunkIndex], maxCodeLen, header, snap))
+			return false;
+		if (header.startBit != chunkStart)
+			return false;
+
+		waysRing.assign(windowSize, 0);
+		for (int j = 0; j <= maxCodeLen; ++j)
+		{
+			signed __int64 absPos = (signed __int64)chunkStart - (signed __int64)maxCodeLen + (signed __int64)j;
+			if (absPos >= 0)
+				waysRing[(size_t)(((unsigned __int64)absPos) % windowSize)] = snap[(size_t)j];
+		}
+
+		state = header.acState;
+		std::vector<unsigned char> hasPrev(bitsThis + 1, 0);
+		std::vector<unsigned __int64> prevPos(bitsThis + 1, 0);
+		std::vector<unsigned short> prevSym(bitsThis + 1, 0);
+
+		int firstBitOffset = 0;
+		if (!ReadBitChunkFromFile(fin, dataByteOffset, chunkStart, bitsThis64, bitsChunk, firstBitOffset))
+			return false;
+
+		for (size_t i = 0; i < bitsThis; ++i)
+		{
+			unsigned __int64 pos = chunkStart + (unsigned __int64)i + 1;
+			int bit = GetBitFromChunkBuffer(bitsChunk, firstBitOffset, (unsigned __int64)i);
+			state = (bit == 0) ? acNodes[(size_t)state].next0 : acNodes[(size_t)state].next1;
+
+			unsigned char waysHere = 0;
+			unsigned char uniqueCount = 0;
+			unsigned __int64 uniquePrevPos = 0;
+			unsigned short uniquePrevSym = 0;
+
+			const std::vector<DecodeOutput>& outs = acNodes[(size_t)state].outs;
+			for (size_t oi = 0; oi < outs.size(); ++oi)
+			{
+				unsigned short length = outs[oi].length;
+				if (length == 0 || (unsigned __int64)length > pos)
+					continue;
+
+				unsigned __int64 fromPosAbs = pos - (unsigned __int64)length;
+				unsigned char fromWays = waysRing[(size_t)(fromPosAbs % windowSize)];
+				if (fromWays == 0)
+					continue;
+
+				int sum = (int)waysHere + (int)fromWays;
+				if (sum > 2) sum = 2;
+				waysHere = (unsigned char)sum;
+
+				if (fromWays == 1)
+				{
+					if (uniqueCount == 0)
+					{
+						uniqueCount = 1;
+						uniquePrevPos = fromPosAbs;
+						uniquePrevSym = outs[oi].symbol;
+					}
+					else if (uniquePrevPos != fromPosAbs || uniquePrevSym != outs[oi].symbol)
+					{
+						uniqueCount = 2;
+					}
+				}
+				else
+				{
+					uniqueCount = 2;
+				}
+			}
+
+			waysRing[(size_t)(pos % windowSize)] = waysHere;
+			if (waysHere == 1 && uniqueCount == 1)
+			{
+				hasPrev[i + 1] = 1;
+				prevPos[i + 1] = uniquePrevPos;
+				prevSym[i + 1] = uniquePrevSym;
+			}
+		}
+
+		unsigned __int64 walk = currentPos;
+		while (walk > chunkStart)
+		{
+			unsigned __int64 local64 = walk - chunkStart;
+			size_t local = (size_t)local64;
+			if ((unsigned __int64)local != local64 || local == 0 || local > bitsThis)
+				return false;
+			if (!hasPrev[local])
+				return false;
+
+			unsigned short sym = prevSym[local];
+			symOut.write((const char*)&sym, (std::streamsize)sizeof(sym));
+			if (!symOut)
+				return false;
+			++decodedSymbols;
+			walk = prevPos[local];
+		}
+		currentPos = walk;
+	}
+
+	symOut.close();
+	if (decodedSymbols != symbolCnt)
+		return false;
+
+	std::ifstream symIn(symRevPath.c_str(), std::ios::binary);
+	if (!symIn)
+		return false;
+	symIn.seekg(0, std::ios::end);
+	std::streamoff symBytesOff = symIn.tellg();
+	if (symBytesOff < 0)
+		return false;
+	unsigned __int64 symBytes = (unsigned __int64)symBytesOff;
+	if (symBytes != decodedSymbols * (unsigned __int64)sizeof(unsigned short))
+		return false;
+
+	OutputByteWriter writer;
+	if (!writer.open(outputPath, originalBits))
+		return false;
+
+	const unsigned __int64 SYM_CHUNK = 32768;
+	unsigned __int64 remain = decodedSymbols;
+	std::vector<unsigned short> symChunk;
+
+	while (remain > 0)
+	{
+		unsigned __int64 take = SYM_CHUNK;
+		if (take > remain)
+			take = remain;
+
+		unsigned __int64 startIndex = remain - take;
+		unsigned __int64 byteOffset = startIndex * (unsigned __int64)sizeof(unsigned short);
+		size_t takeSize = (size_t)take;
+		if ((unsigned __int64)takeSize != take)
+			return false;
+
+		symChunk.resize(takeSize);
+		symIn.clear();
+		symIn.seekg((std::streamoff)byteOffset, std::ios::beg);
+		if (!symIn)
+			return false;
+		symIn.read((char*)&symChunk[0], (std::streamsize)(takeSize * sizeof(unsigned short)));
+		if (symIn.gcount() != (std::streamsize)(takeSize * sizeof(unsigned short)))
+			return false;
+
+		for (size_t i = takeSize; i > 0; --i)
+		{
+			if (!writer.pushSymbol(symChunk[i - 1], len))
+				return false;
+		}
+
+		remain -= take;
+	}
+
+	return writer.finish();
+}
+
+static bool DecodeENC2PayloadFileStreamToFile(const std::string& payloadPath,
+	const std::string& outputPath)
+{
+	std::ifstream fin(payloadPath.c_str(), std::ios::binary);
+	if (!fin)
+		return false;
+
+	fin.seekg(0, std::ios::end);
+	std::streamoff payloadSizeOff = fin.tellg();
+	if (payloadSizeOff < 0)
+		return false;
+	unsigned __int64 payloadSize = (unsigned __int64)payloadSizeOff;
+	fin.seekg(0, std::ios::beg);
+
+	char magic[4] = {0};
+	fin.read(magic, 4);
+	if (fin.gcount() != 4)
+		return false;
+	if (memcmp(magic, MAGIC_ENC2, 4) != 0)
+		return false;
+
+	unsigned char lenU8 = 0;
+	unsigned char reserved = 0;
+	unsigned short tableCnt = 0;
+	unsigned __int64 symbolCnt = 0;
+	unsigned __int64 originalBits = 0;
+	unsigned __int64 tableBits = 0;
+	unsigned __int64 encodedBits = 0;
+
+	if (!ReadPodFromStream(fin, lenU8)) return false;
+	if (!ReadPodFromStream(fin, reserved)) return false;
+	if (!ReadPodFromStream(fin, tableCnt)) return false;
+	if (!ReadPodFromStream(fin, symbolCnt)) return false;
+	if (!ReadPodFromStream(fin, originalBits)) return false;
+	if (!ReadPodFromStream(fin, tableBits)) return false;
+	if (!ReadPodFromStream(fin, encodedBits)) return false;
+
+	int len = (int)lenU8;
+	if (len <= 0 || len > MAX_LEN)
+		return false;
+
+	std::vector<unsigned short> tableSymbols;
+	std::vector<unsigned short> tableCodeLens;
+	tableSymbols.reserve((size_t)tableCnt);
+	tableCodeLens.reserve((size_t)tableCnt);
+
+	for (unsigned short i = 0; i < tableCnt; ++i)
+	{
+		unsigned short symbol = 0;
+		unsigned short codeLen = 0;
+		if (!ReadPodFromStream(fin, symbol)) return false;
+		if (!ReadPodFromStream(fin, codeLen)) return false;
+		tableSymbols.push_back(symbol);
+		tableCodeLens.push_back(codeLen);
+	}
+
+	unsigned __int64 tableBytes64 = BytesForBits(tableBits);
+	size_t tableBytes = (size_t)tableBytes64;
+	if ((unsigned __int64)tableBytes != tableBytes64)
+		return false;
+
+	std::vector<unsigned char> tableBitsData;
+	tableBitsData.resize(tableBytes);
+	if (tableBytes > 0)
+	{
+		fin.read((char*)&tableBitsData[0], (std::streamsize)tableBytes);
+		if (fin.gcount() != (std::streamsize)tableBytes)
+			return false;
+	}
+
+	std::vector<DecTableEntry> table;
+	table.reserve((size_t)tableCnt);
+	unsigned __int64 tableBitOffset = 0;
+	for (unsigned short ti = 0; ti < tableCnt; ++ti)
+	{
+		unsigned short codeLen = tableCodeLens[(size_t)ti];
+		if (tableBitOffset + (unsigned __int64)codeLen > tableBits)
+			return false;
+
+		DecTableEntry e;
+		e.symbol = tableSymbols[(size_t)ti];
+		e.code.reserve((size_t)codeLen);
+		for (unsigned short b = 0; b < codeLen; ++b)
+		{
+			int bit = GetBitFromBytes(tableBytes > 0 ? &tableBitsData[0] : NULL,
+				tableBitOffset + (unsigned __int64)b);
+			e.code += (bit ? '1' : '0');
+		}
+		tableBitOffset += (unsigned __int64)codeLen;
+		table.push_back(e);
+	}
+	if (tableBitOffset != tableBits)
+		return false;
+
+	std::streamoff dataOff = fin.tellg();
+	if (dataOff < 0)
+		return false;
+	unsigned __int64 dataByteOffset = (unsigned __int64)dataOff;
+	unsigned __int64 dataBytes64 = BytesForBits(encodedBits);
+	if (dataByteOffset + dataBytes64 > payloadSize)
+		return false;
+
+	if (IsPrefixFree(table))
+	{
+		return DecodePrefixDataToFile(payloadPath,
+			dataByteOffset,
+			encodedBits,
+			symbolCnt,
+			len,
+			originalBits,
+			table,
+			outputPath);
+	}
+
+	std::string checkpointPath = outputPath + ".zjh.dpck.tmp";
+	std::string symRevPath = outputPath + ".zjh.symrev.tmp";
+	RemoveFileNoThrow(checkpointPath);
+	RemoveFileNoThrow(symRevPath);
+	bool ok = DecodeNonPrefixDataToFile(payloadPath,
+		dataByteOffset,
+		encodedBits,
+		symbolCnt,
+		len,
+		originalBits,
+		table,
+		outputPath,
+		checkpointPath,
+		symRevPath);
+	RemoveFileNoThrow(checkpointPath);
+	RemoveFileNoThrow(symRevPath);
+	return ok;
+}
+
+static bool DecodeENC1PayloadFileStreamToFile(const std::string& payloadPath,
+	const std::string& outputPath)
+{
+	std::ifstream fin(payloadPath.c_str(), std::ios::binary);
+	if (!fin)
+		return false;
+
+	fin.seekg(0, std::ios::end);
+	std::streamoff payloadSizeOff = fin.tellg();
+	if (payloadSizeOff < 0)
+		return false;
+	unsigned __int64 payloadSize = (unsigned __int64)payloadSizeOff;
+	fin.seekg(0, std::ios::beg);
+
+	char magic[4] = {0};
+	fin.read(magic, 4);
+	if (fin.gcount() != 4)
+		return false;
+	if (memcmp(magic, MAGIC_ENC1, 4) != 0)
+		return false;
+
+	unsigned char lenU8 = 0;
+	unsigned char reserved = 0;
+	unsigned short tableCnt = 0;
+	unsigned __int64 symbolCnt = 0;
+	unsigned __int64 originalBits = 0;
+	unsigned __int64 encodedBits = 0;
+
+	if (!ReadPodFromStream(fin, lenU8)) return false;
+	if (!ReadPodFromStream(fin, reserved)) return false;
+	if (!ReadPodFromStream(fin, tableCnt)) return false;
+	if (!ReadPodFromStream(fin, symbolCnt)) return false;
+	if (!ReadPodFromStream(fin, originalBits)) return false;
+	if (!ReadPodFromStream(fin, encodedBits)) return false;
+
+	int len = (int)lenU8;
+	if (len <= 0 || len > MAX_LEN)
+		return false;
+
+	std::vector<DecTableEntry> table;
+	table.reserve((size_t)tableCnt);
+
+	for (unsigned short i = 0; i < tableCnt; ++i)
+	{
+		unsigned short symbol = 0;
+		unsigned short codeLen = 0;
+		if (!ReadPodFromStream(fin, symbol)) return false;
+		if (!ReadPodFromStream(fin, codeLen)) return false;
+
+		unsigned __int64 codeBytes64 = BytesForBits((unsigned __int64)codeLen);
+		size_t codeBytes = (size_t)codeBytes64;
+		if ((unsigned __int64)codeBytes != codeBytes64)
+			return false;
+
+		std::vector<unsigned char> codeData;
+		codeData.resize(codeBytes);
+		if (codeBytes > 0)
+		{
+			fin.read((char*)&codeData[0], (std::streamsize)codeBytes);
+			if (fin.gcount() != (std::streamsize)codeBytes)
+				return false;
+		}
+
+		DecTableEntry e;
+		e.symbol = symbol;
+		e.code.reserve((size_t)codeLen);
+		for (unsigned short b = 0; b < codeLen; ++b)
+		{
+			int bit = GetBitFromBytes(codeBytes > 0 ? &codeData[0] : NULL,
+				(unsigned __int64)b);
+			e.code += (bit ? '1' : '0');
+		}
+		table.push_back(e);
+	}
+
+	std::streamoff dataOff = fin.tellg();
+	if (dataOff < 0)
+		return false;
+	unsigned __int64 dataByteOffset = (unsigned __int64)dataOff;
+	unsigned __int64 dataBytes64 = BytesForBits(encodedBits);
+	if (dataByteOffset + dataBytes64 > payloadSize)
+		return false;
+
+	if (IsPrefixFree(table))
+	{
+		return DecodePrefixDataToFile(payloadPath,
+			dataByteOffset,
+			encodedBits,
+			symbolCnt,
+			len,
+			originalBits,
+			table,
+			outputPath);
+	}
+
+	std::string checkpointPath = outputPath + ".zjh.dpck.tmp";
+	std::string symRevPath = outputPath + ".zjh.symrev.tmp";
+	RemoveFileNoThrow(checkpointPath);
+	RemoveFileNoThrow(symRevPath);
+	bool ok = DecodeNonPrefixDataToFile(payloadPath,
+		dataByteOffset,
+		encodedBits,
+		symbolCnt,
+		len,
+		originalBits,
+		table,
+		outputPath,
+		checkpointPath,
+		symRevPath);
+	RemoveFileNoThrow(checkpointPath);
+	RemoveFileNoThrow(symRevPath);
+	return ok;
+}
+static bool DecodeLegacyPayloadFileStreamToFile(const std::string& payloadPath,
+	const std::string& outputPath,
+	const char* password)
+{
+	std::ifstream fin(payloadPath.c_str(), std::ios::binary);
+	if (!fin)
+		return false;
+
+	LegacyHeader header;
+	fin.read((char*)&header, (std::streamsize)sizeof(header));
+	if (fin.gcount() != (std::streamsize)sizeof(header))
+		return false;
+	if (memcmp(header.magic, MAGIC_LEGACY, 4) != 0)
+		return false;
+
+	std::ofstream fout(outputPath.c_str(), std::ios::binary | std::ios::trunc);
+	if (!fout)
+		return false;
+
+	unsigned __int64 payloadLen = (unsigned __int64)header.payloadLen;
+	unsigned __int64 originalLen = (unsigned __int64)header.originalLen;
+	unsigned __int64 written = 0;
+	unsigned long seed = 0xA5C39E7DUL;
+	int passLen = (password != NULL) ? (int)strlen(password) : 0;
+	unsigned __int64 cryptIndex = 0;
+
+	std::vector<unsigned char> chunk(64 * 1024, 0);
+	while (payloadLen > 0)
+	{
+		size_t take = chunk.size();
+		if ((unsigned __int64)take > payloadLen)
+			take = (size_t)payloadLen;
+		fin.read((char*)&chunk[0], (std::streamsize)take);
+		if (fin.gcount() != (std::streamsize)take)
+			return false;
+
+		for (size_t i = 0; i < take; ++i)
+		{
+			unsigned char b = chunk[i];
+			if (passLen > 0)
+			{
+				unsigned __int64 idx = cryptIndex;
+				seed = seed * 1664525UL + 1013904223UL + (unsigned char)password[(size_t)(idx % (unsigned __int64)passLen)];
+				unsigned char p1 = (unsigned char)password[(size_t)(((idx * 7 + 3) % (unsigned __int64)passLen))];
+				unsigned char key = (unsigned char)((((seed >> 24) & 0xFF) ^ p1 ^ (unsigned char)(idx & 0xFF)));
+				b ^= key;
+				++cryptIndex;
+			}
+
+			if (written < originalLen)
+			{
+				fout.write((const char*)&b, 1);
+				if (!fout)
+					return false;
+				++written;
+			}
+		}
+
+		payloadLen -= (unsigned __int64)take;
+	}
+
+	return true;
+}
+
+static bool CopyPayloadToTempFile(const std::string& sourcePath,
+	unsigned __int64 payloadSize,
+	const std::string& tempPayloadPath,
+	bool decryptPayload,
+	const char* password)
+{
+	std::ifstream fin(sourcePath.c_str(), std::ios::binary);
+	if (!fin)
+		return false;
+	std::ofstream fout(tempPayloadPath.c_str(), std::ios::binary | std::ios::trunc);
+	if (!fout)
+		return false;
+
+	unsigned long seed = 0xA5C39E7DUL;
+	int passLen = (password != NULL) ? (int)strlen(password) : 0;
+	unsigned __int64 cryptIndex = 0;
+	std::vector<unsigned char> chunk(64 * 1024, 0);
+	unsigned __int64 left = payloadSize;
+
+	while (left > 0)
+	{
+		size_t take = chunk.size();
+		if ((unsigned __int64)take > left)
+			take = (size_t)left;
+
+		fin.read((char*)&chunk[0], (std::streamsize)take);
+		if (fin.gcount() != (std::streamsize)take)
+			return false;
+
+		if (decryptPayload && passLen > 0)
+		{
+			for (size_t i = 0; i < take; ++i)
+			{
+				unsigned __int64 idx = cryptIndex;
+				seed = seed * 1664525UL + 1013904223UL + (unsigned char)password[(size_t)(idx % (unsigned __int64)passLen)];
+				unsigned char p1 = (unsigned char)password[(size_t)(((idx * 7 + 3) % (unsigned __int64)passLen))];
+				unsigned char key = (unsigned char)((((seed >> 24) & 0xFF) ^ p1 ^ (unsigned char)(idx & 0xFF)));
+				chunk[i] ^= key;
+				++cryptIndex;
+			}
+		}
+
+		fout.write((const char*)&chunk[0], (std::streamsize)take);
+		if (!fout)
+			return false;
+		left -= (unsigned __int64)take;
+	}
+
+	return true;
+}
 static bool DecodeToFile(const std::string& path,
 	const std::string& outputPath,
 	const char* password)
 {
-	// 解压总入口：
-	// 1) 解析密码尾标记；
-	// 2) 校验口令哈希（如有密码）；
-	// 3) 自动分流到 ENC2 / ENC1 / Legacy 解码器。
-	std::vector<unsigned char> fileData;
-	if (!ReadAllBytes(path, fileData))
+	// 解压总入口（流式版）：
+	// 1) 先解析尾标记；
+	// 2) 对 payload 做“按需流式解密+落盘”；
+	// 3) 再按魔数分流解码，避免整包内存驻留。
+	std::ifstream fin(path.c_str(), std::ios::binary);
+	if (!fin)
 		return false;
+
+	fin.seekg(0, std::ios::end);
+	std::streamoff fileSizeOff = fin.tellg();
+	if (fileSizeOff <= 0)
+		return false;
+	unsigned __int64 fileSize = (unsigned __int64)fileSizeOff;
 
 	bool hasPassword = false;
 	unsigned long storedHash = 0;
-	size_t payloadSize = fileData.size();
-	if (!ParseTailInfo(fileData, &hasPassword, &storedHash, &payloadSize))
-		return false;
+	unsigned __int64 payloadSize = fileSize;
+
+	if (fileSize >= (unsigned __int64)TAIL_SIZE)
+	{
+		unsigned char tail[TAIL_SIZE] = {0};
+		fin.seekg((std::streamoff)(fileSize - (unsigned __int64)TAIL_SIZE), std::ios::beg);
+		fin.read((char*)tail, (std::streamsize)TAIL_SIZE);
+		if (fin.gcount() != (std::streamsize)TAIL_SIZE)
+			return false;
+		if (memcmp(tail, TAIL_MAGIC, TAIL_MAGIC_LEN) == 0)
+		{
+			hasPassword = ((tail[TAIL_MAGIC_LEN] & 1) != 0);
+			memcpy(&storedHash, tail + TAIL_MAGIC_LEN + 1, 4);
+			payloadSize = fileSize - (unsigned __int64)TAIL_SIZE;
+		}
+	}
 	if (payloadSize == 0)
 		return false;
-
-	std::vector<unsigned char> payload;
-	payload.assign(fileData.begin(), fileData.begin() + payloadSize);
-
-	bool isLegacy = false;
-	if (payload.size() >= 4 && memcmp(&payload[0], MAGIC_LEGACY, 4) == 0)
-		isLegacy = true;
-
-	if (isLegacy)
-	{
-		if (hasPassword)
-		{
-			if (password == NULL || password[0] == '\0')
-				return false;
-			if (PasswordHash32(password) != storedHash)
-				return false;
-		}
-		return DecodeLegacyPayloadToFile(payload, outputPath, hasPassword ? password : NULL);
-	}
 
 	if (hasPassword)
 	{
@@ -2262,17 +3592,66 @@ static bool DecodeToFile(const std::string& path,
 			return false;
 		if (PasswordHash32(password) != storedHash)
 			return false;
-		XorCryptPayload(payload, password, NULL, ZJH_PROGRESS_STAGE_ENCRYPT_PAYLOAD, 0, 0);
 	}
 
-	if (payload.size() >= 4 && memcmp(&payload[0], MAGIC_ENC2, 4) == 0)
-		return DecodeENC2PayloadToFile(payload, outputPath);
-	if (payload.size() >= 4 && memcmp(&payload[0], MAGIC_ENC1, 4) == 0)
-		return DecodeENC1PayloadToFile(payload, outputPath);
-	if (payload.size() >= 4 && memcmp(&payload[0], MAGIC_LEGACY, 4) == 0)
-		return DecodeLegacyPayloadToFile(payload, outputPath, NULL);
+	char rawMagic[4] = {0};
+	if (payloadSize >= 4)
+	{
+		fin.clear();
+		fin.seekg(0, std::ios::beg);
+		fin.read(rawMagic, 4);
+		if (fin.gcount() != 4)
+			return false;
+	}
+	bool legacyHint = (payloadSize >= 4 && memcmp(rawMagic, MAGIC_LEGACY, 4) == 0);
 
-	return false;
+	std::string payloadTempPath = outputPath + ".zjh.payload.tmp";
+	RemoveFileNoThrow(payloadTempPath);
+	bool decryptPayload = (hasPassword && !legacyHint);
+	if (!CopyPayloadToTempFile(path, payloadSize, payloadTempPath, decryptPayload, password))
+	{
+		RemoveFileNoThrow(payloadTempPath);
+		return false;
+	}
+
+	char payloadMagic[4] = {0};
+	std::ifstream pfin(payloadTempPath.c_str(), std::ios::binary);
+	if (!pfin)
+	{
+		RemoveFileNoThrow(payloadTempPath);
+		return false;
+	}
+	pfin.read(payloadMagic, 4);
+	if (pfin.gcount() != 4)
+	{
+		RemoveFileNoThrow(payloadTempPath);
+		return false;
+	}
+	pfin.close();
+
+	bool ok = false;
+	if (memcmp(payloadMagic, MAGIC_ENC2, 4) == 0)
+	{
+		ok = DecodeENC2PayloadFileStreamToFile(payloadTempPath, outputPath);
+	}
+	else if (memcmp(payloadMagic, MAGIC_ENC1, 4) == 0)
+	{
+		ok = DecodeENC1PayloadFileStreamToFile(payloadTempPath, outputPath);
+	}
+	else if (memcmp(payloadMagic, MAGIC_LEGACY, 4) == 0)
+	{
+		const char* legacyPass = (hasPassword && !decryptPayload) ? password : NULL;
+		ok = DecodeLegacyPayloadFileStreamToFile(payloadTempPath,
+			outputPath,
+			legacyPass);
+	}
+	else
+	{
+		ok = false;
+	}
+
+	RemoveFileNoThrow(payloadTempPath);
+	return ok;
 }
 
 } // namespace
@@ -2379,14 +3758,31 @@ bool ZJH_GetPackageInfo(const std::string& path, bool* hasPassword)
 	if (hasPassword)
 		*hasPassword = false;
 
-	std::vector<unsigned char> fileData;
-	if (!ReadAllBytes(path, fileData))
+	std::ifstream fin(path.c_str(), std::ios::binary);
+	if (!fin)
 		return false;
 
-	bool hasPwd = false;
-	size_t payloadSize = fileData.size();
-	if (!ParseTailInfo(fileData, &hasPwd, NULL, &payloadSize))
+	fin.seekg(0, std::ios::end);
+	std::streamoff fileSizeOff = fin.tellg();
+	if (fileSizeOff <= 0)
 		return false;
+	unsigned __int64 fileSize = (unsigned __int64)fileSizeOff;
+
+	bool hasPwd = false;
+	unsigned __int64 payloadSize = fileSize;
+	if (fileSize >= (unsigned __int64)TAIL_SIZE)
+	{
+		unsigned char tail[TAIL_SIZE] = {0};
+		fin.seekg((std::streamoff)(fileSize - (unsigned __int64)TAIL_SIZE), std::ios::beg);
+		fin.read((char*)tail, (std::streamsize)TAIL_SIZE);
+		if (fin.gcount() != (std::streamsize)TAIL_SIZE)
+			return false;
+		if (memcmp(tail, TAIL_MAGIC, TAIL_MAGIC_LEN) == 0)
+		{
+			hasPwd = ((tail[TAIL_MAGIC_LEN] & 1) != 0);
+			payloadSize = fileSize - (unsigned __int64)TAIL_SIZE;
+		}
+	}
 
 	if (hasPassword)
 		*hasPassword = hasPwd;
@@ -2394,12 +3790,18 @@ bool ZJH_GetPackageInfo(const std::string& path, bool* hasPassword)
 	if (payloadSize < 4)
 		return false;
 
-	const unsigned char* payload = &fileData[0];
-	if (memcmp(payload, MAGIC_ENC2, 4) == 0)
+	char magic[4] = {0};
+	fin.clear();
+	fin.seekg(0, std::ios::beg);
+	fin.read(magic, 4);
+	if (fin.gcount() != 4)
+		return false;
+
+	if (memcmp(magic, MAGIC_ENC2, 4) == 0)
 		return true;
-	if (memcmp(payload, MAGIC_ENC1, 4) == 0)
+	if (memcmp(magic, MAGIC_ENC1, 4) == 0)
 		return true;
-	if (memcmp(payload, MAGIC_LEGACY, 4) == 0)
+	if (memcmp(magic, MAGIC_LEGACY, 4) == 0)
 		return true;
 
 	if (hasPwd)
@@ -2407,3 +3809,7 @@ bool ZJH_GetPackageInfo(const std::string& path, bool* hasPassword)
 
 	return false;
 }
+
+
+
+

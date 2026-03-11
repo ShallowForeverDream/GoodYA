@@ -167,114 +167,125 @@ BOOL CDecDlg::PromptPassword(CString& outPassword)
 void CDecDlg::OnDecDlgOk()
 {
 	// 代码段功能：执行解压主流程。
-	char savePath[500] = {0};
-	if (!GetInputPath(savePath))
-		return;
-
-	BOOL isHuf = EndsWithIgnoreCase(savePath, ".huf");
-	BOOL isZjh = EndsWithIgnoreCase(savePath, ".zjh");
-	if (!isHuf && !isZjh)
+	try
 	{
-		ShowMsgByACP(L"仅支持解压 .huf 或 .zjh 文件！");
-		return;
-	}
-
-	Huffman huffman;
-	BOOL hasPassword = FALSE;
-	unsigned long storedCrc = 0;
-	char md5Hex[33] = {0};
-
-	if (isHuf)
-	{
-		if (!huffman.GetPackageInfo(savePath, &hasPassword, &storedCrc, md5Hex))
-		{
-			ShowMsgByACP(L"读取压缩文件信息失败！");
+		char savePath[500] = {0};
+		if (!GetInputPath(savePath))
 			return;
-		}
-	}
-	else
-	{
-		bool hasPasswordZjh = false;
-		if (!ZJH_GetPackageInfo(std::string(savePath), &hasPasswordZjh))
-		{
-			ShowMsgByACP(L"读取 ZJH 文件信息失败！");
-			return;
-		}
-		hasPassword = hasPasswordZjh ? TRUE : FALSE;
-	}
 
-	CString password;
-	char passA[129] = {0};
-	const char* pPass = "";
-	if (hasPassword)
-	{
-		if (!PromptPassword(password))
-			return;
-#ifdef _UNICODE
-		if (WideCharToMultiByte(CP_ACP, 0, password, -1, passA, 129, NULL, NULL) == 0)
+		BOOL isHuf = EndsWithIgnoreCase(savePath, ".huf");
+		BOOL isZjh = EndsWithIgnoreCase(savePath, ".zjh");
+		if (!isHuf && !isZjh)
 		{
-			ShowMsgByACP(L"密码文本转换失败！");
-			return;
-		}
-#else
-		strncpy(passA, password, 128);
-		passA[128] = '\0';
-#endif
-		pPass = passA;
-	}
-
-	if (isHuf)
-	{
-		if (!huffman.ReadCodeFromFile(savePath, pPass))
-		{
-			if (hasPassword)
-				ShowMsgByACP(L"密码错误，或压缩文件已损坏！");
-			else
-				ShowMsgByACP(L"读取压缩文件失败，文件不存在或损坏！");
+			ShowMsgByACP(L"仅支持解压 .huf 或 .zjh 文件！");
 			return;
 		}
 
-		huffman.Decode();
+		Huffman huffman;
+		BOOL hasPassword = FALSE;
+		unsigned long storedCrc = 0;
+		char md5Hex[33] = {0};
 
-		// 文件记录原文 CRC32 时，做解压结果一致性校验。
-		if (storedCrc != 0)
+		if (isHuf)
 		{
-			unsigned long decodedCrc = huffman.GetTextCRC32();
-			if (decodedCrc != storedCrc)
+			if (!huffman.GetPackageInfo(savePath, &hasPassword, &storedCrc, md5Hex))
 			{
-				ShowMsgByACP(L"CRC 校验失败，解压结果与原文不一致！");
+				ShowMsgByACP(L"读取压缩文件信息失败！");
+				return;
+			}
+		}
+		else
+		{
+			bool hasPasswordZjh = false;
+			if (!ZJH_GetPackageInfo(std::string(savePath), &hasPasswordZjh))
+			{
+				ShowMsgByACP(L"读取 ZJH 文件信息失败！");
+				return;
+			}
+			hasPassword = hasPasswordZjh ? TRUE : FALSE;
+		}
+
+		CString password;
+		char passA[129] = {0};
+		const char* pPass = "";
+		if (hasPassword)
+		{
+			if (!PromptPassword(password))
+				return;
+#ifdef _UNICODE
+			if (WideCharToMultiByte(CP_ACP, 0, password, -1, passA, 129, NULL, NULL) == 0)
+			{
+				ShowMsgByACP(L"密码文本转换失败！");
+				return;
+			}
+#else
+			strncpy(passA, password, 128);
+			passA[128] = '\0';
+#endif
+			pPass = passA;
+		}
+
+		if (isHuf)
+		{
+			if (!huffman.ReadCodeFromFile(savePath, pPass))
+			{
+				if (hasPassword)
+					ShowMsgByACP(L"密码错误，或压缩文件已损坏！");
+				else
+					ShowMsgByACP(L"读取压缩文件失败，文件不存在或损坏！");
+				return;
+			}
+
+			huffman.Decode();
+
+			// 文件记录原文 CRC32 时，做解压结果一致性校验。
+			if (storedCrc != 0)
+			{
+				unsigned long decodedCrc = huffman.GetTextCRC32();
+				if (decodedCrc != storedCrc)
+				{
+					ShowMsgByACP(L"CRC 校验失败，解压结果与原文不一致！");
+					return;
+				}
+			}
+
+			char outPath[500] = {0};
+			strncpy(outPath, savePath, sizeof(outPath) - 1);
+			outPath[sizeof(outPath) - 1] = '\0';
+			char* pExt = strrchr(outPath, '.');
+			if (pExt != NULL)
+				strcpy(pExt + 1, "txt");
+			else
+				strcat(outPath, ".txt");
+
+			huffman.SaveTextToFile(outPath);
+		}
+		else
+		{
+			ZJH_decrypto decrypto;
+			if (!decrypto.decrypto(std::string(savePath), pPass))
+			{
+				if (hasPassword)
+					ShowMsgByACP(L"ZJH 解压失败：密码错误，或压缩包已损坏！");
+				else
+					ShowMsgByACP(L"ZJH 解压失败：文件格式不正确、内容损坏、无写权限或磁盘空间不足！");
 				return;
 			}
 		}
 
-		char outPath[500] = {0};
-		strncpy(outPath, savePath, sizeof(outPath) - 1);
-		outPath[sizeof(outPath) - 1] = '\0';
-		char* pExt = strrchr(outPath, '.');
-		if (pExt != NULL)
-			strcpy(pExt + 1, "txt");
-		else
-			strcat(outPath, ".txt");
-
-		huffman.SaveTextToFile(outPath);
+		ShowMsgByACP(L"解压完成。");
+		EndDialog(IDOK);
 	}
-	else
+	catch (CMemoryException* e)
 	{
-		ZJH_decrypto decrypto;
-		if (!decrypto.decrypto(std::string(savePath), pPass))
-		{
-			if (hasPassword)
-				ShowMsgByACP(L"ZJH 解压失败：密码错误，或压缩包已损坏！");
-			else
-				ShowMsgByACP(L"ZJH 解压失败：文件格式不正确或内容损坏！");
-			return;
-		}
+		if (e != NULL) e->Delete();
+		ShowMsgByACP(L"解压失败：内存不足，请检查输出目录磁盘空间后重试。");
 	}
-
-	ShowMsgByACP(L"解压完成。");
-	EndDialog(IDOK);
+	catch (...)
+	{
+		ShowMsgByACP(L"解压失败：文件可能损坏、密码错误、无写权限或磁盘空间不足。");
+	}
 }
-
 // 功能：浏览并选择待解压 .huf/.zjh 文件。
 void CDecDlg::OnBrowse()
 {
@@ -530,4 +541,5 @@ void CDecDlg::OnTvnSelchangedTree1(NMHDR* pNMHDR, LRESULT* pResult)
 
 	*pResult = 0;
 }
+
 
